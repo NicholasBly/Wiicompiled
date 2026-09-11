@@ -412,8 +412,8 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     }
 
     config.rumbleEnabled = FindConfigValue<bool>(document, "controller", "rumble");
-    if (auto value = FindConfigUint(document, "audio", "mute_key")) {
-        config.muteHotkey = static_cast<int32_t>(*value);
+    if (auto value = FindConfigInt(document, "audio", "mute_key")) {
+        config.muteHotkey = *value;
     }
 
     if (const auto* section = document.contains("controller") ? &document.at("controller") : nullptr;
