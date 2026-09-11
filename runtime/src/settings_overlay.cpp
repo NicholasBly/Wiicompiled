@@ -80,6 +80,7 @@ int g_soundEffectsVolumePercent =
 int g_uiVolumePercent = static_cast<int>(std::lround(RuntimeConfigFile::UiVolume(1.0f) * 100.0f));
 int g_voicesVolumePercent = static_cast<int>(std::lround(RuntimeConfigFile::VoicesVolume(1.0f) * 100.0f));
 bool g_audioMuted = RuntimeConfigFile::AudioMuted(false);
+int32_t g_muteHotkey = RuntimeConfigFile::MuteHotkey(SDL_SCANCODE_BACKSLASH);
 bool g_audioMixWorker = RuntimeConfigFile::AudioMixWorkerEnabled(true);
 bool g_attenuateMusicWhenMediaPlays = RuntimeConfigFile::AttenuateMusicWhenMediaPlays(false);
 int g_frameInterpolationMode = [] {
@@ -429,7 +430,7 @@ const char* KeyBindingName(int scancode) {
     }
 }
 
-enum class RebindKind { KeyboardButton, KeyboardAxis, Controller };
+enum class RebindKind { KeyboardButton, KeyboardAxis, Controller, MuteHotkey };
 struct RebindState {
     bool active = false;
     bool openPopup = false;
@@ -495,6 +496,11 @@ void CompleteRebind(uint32_t value) {
         if (alternateValue != PAD_NATIVE_BUTTON_INVALID) config += ',' + NativeBindingConfig(alternateValue);
         for (size_t i = 0; i < kControllerButtons.size(); ++i)
             if (kControllerButtons[i].padButton == capture.target) RuntimeConfigFile::SetControllerButton(i, config);
+    } else if (capture.kind == RebindKind::MuteHotkey) {
+        g_muteHotkey = static_cast<int32_t>(value);
+        RuntimeConfigFile::SetMuteHotkey(g_muteHotkey);
+        g_rebind.active = false;
+        return;
     } else if (capture.kind == RebindKind::KeyboardButton) {
         PADSetKeyButtonBinding(capture.port, {static_cast<int32_t>(value), capture.target});
     } else {
@@ -956,6 +962,7 @@ void DrawAudioSettings() {
         AudioBackend::Instance().SetMuted(g_audioMuted);
         RuntimeConfigFile::SetAudioMuted(g_audioMuted);
     }
+    DrawKeyBinding("Mute shortcut", g_muteHotkey, RebindKind::MuteHotkey, 0);
     ImGui::Separator();
     if (ImGui::Checkbox("Mix audio on a worker thread", &g_audioMixWorker)) {
         // Applies immediately: SetMixWorkerEnabled joins any in-flight mix
@@ -1276,9 +1283,12 @@ void UpdateCursorAutoHide() {
         return;
     }
     g_cursorHidden = shouldHide;
+    // ImGui_ImplSDL3_NewFrame calls SDL_ShowCursor every frame unless this flag is set.
     if (shouldHide) {
+        ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
         SDL_HideCursor();
     } else {
+        ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
         SDL_ShowCursor();
     }
 }
@@ -1341,6 +1351,12 @@ void HandleEvents(const AuroraEvent* events) noexcept {
         }
         if (!g_rebind.active && IsToggleKey(ev->sdl, SDL_SCANCODE_F10)) {
             SetTopBarVisible(!g_topBarVisible);
+        }
+        if (!g_rebind.active && g_muteHotkey != PAD_KEY_INVALID &&
+            IsToggleKey(ev->sdl, static_cast<SDL_Scancode>(g_muteHotkey))) {
+            g_audioMuted = !g_audioMuted;
+            AudioBackend::Instance().SetMuted(g_audioMuted);
+            RuntimeConfigFile::SetAudioMuted(g_audioMuted);
         }
         if (IsMouseActivity(ev->sdl)) {
             g_lastMouseActivity = Clock::now();
