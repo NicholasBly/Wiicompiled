@@ -571,10 +571,11 @@ void DrawRebindPrompt() {
     ImGui::EndPopup();
 }
 
-void DrawKeyBinding(const char* label, int scancode, RebindKind kind, uint16_t target) {
+void DrawKeyBinding(const char* label, int scancode, RebindKind kind, uint16_t target,
+                    float width = 220.0f) {
     const std::string caption = std::string(KeyBindingName(scancode)) + "##binding";
-    if (ImGui::Button(caption.c_str(), ImVec2(220.0f, 0.0f))) BeginRebind(kind, target, label);
-    ImGui::SameLine();
+    if (ImGui::Button(caption.c_str(), ImVec2(width, 0.0f))) BeginRebind(kind, target, label);
+    ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
     ImGui::TextUnformatted(label);
 
 }
@@ -961,11 +962,14 @@ void DrawAudioSettings() {
         MusicAttenuation::SetVoicesVolume(volume);
         RuntimeConfigFile::SetVoicesVolume(volume);
     }
+    const float labelColumn = ImGui::GetCursorPosX() + ImGui::CalcItemWidth();
     if (ImGui::Checkbox("Mute", &g_audioMuted)) {
         AudioBackend::Instance().SetMuted(g_audioMuted);
         RuntimeConfigFile::SetAudioMuted(g_audioMuted);
     }
-    DrawKeyBinding("Mute shortcut", g_muteHotkey, RebindKind::MuteHotkey, 0);
+    ImGui::SameLine();
+    DrawKeyBinding("Mute shortcut", g_muteHotkey, RebindKind::MuteHotkey, 0,
+                   std::max(60.0f, labelColumn - ImGui::GetCursorPosX()));
     ImGui::Separator();
     if (ImGui::Checkbox("Mix audio on a worker thread", &g_audioMixWorker)) {
         // Applies immediately: SetMixWorkerEnabled joins any in-flight mix
@@ -1250,6 +1254,7 @@ void DrawTopBar() {
     const std::string audioMenuLabel = audioLabel + "###AudioSettingsMenu";
     if (ImGui::BeginMenu(audioMenuLabel.c_str())) {
         DrawAudioSettings();
+        DrawRebindPrompt();
         ImGui::EndMenu();
     }
 
