@@ -1213,15 +1213,20 @@ void DrawTopBar() {
     ImGui::GetBackgroundDrawList()->AddRectFilled(viewport->Pos,
         ImVec2(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y),
         IM_COL32(0, 0, 0, 70));
+    constexpr float kHintMargin = 10.0f;
     ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + viewport->Size.x * 0.5f,
-                                 viewport->Pos.y + viewport->Size.y - 24.0f),
-                            ImGuiCond_Always, ImVec2(0.5f, 1.0f));
-    ImGui::SetNextWindowBgAlpha(0.85f);
+                                 viewport->Pos.y + ImGui::GetFrameHeight() + kHintMargin),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.55f);
     if (ImGui::Begin("Settings input hint", nullptr,
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoFocusOnAppearing)) {
-        ImGui::TextUnformatted("Settings open - game controls disabled. Press F10 to return to the game.");
+        for (const char* line : {"Settings open - game controls disabled.",
+                                 "Press F10 to return to the game."}) {
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize(line).x) * 0.5f);
+            ImGui::TextUnformatted(line);
+        }
     }
     ImGui::End();
     if (!ImGui::BeginMainMenuBar()) return;
@@ -1387,8 +1392,14 @@ void HandleEvents(const AuroraEvent* events) noexcept {
             AudioBackend::Instance().SetMuted(g_audioMuted);
             RuntimeConfigFile::SetAudioMuted(g_audioMuted);
         }
-        if (!g_rebind.active && !g_topBarVisible && IsToggleKey(ev->sdl, SDL_SCANCODE_ESCAPE)) {
-            g_exitPromptOpen = true;
+        if (!g_rebind.active && IsToggleKey(ev->sdl, SDL_SCANCODE_ESCAPE)) {
+            if (g_exitPromptOpen) {
+                g_exitPromptOpen = false;
+            } else if (g_topBarVisible) {
+                SetTopBarVisible(false);
+            } else {
+                g_exitPromptOpen = true;
+            }
         }
         if (IsMouseActivity(ev->sdl)) {
             g_lastMouseActivity = Clock::now();
