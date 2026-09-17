@@ -1338,6 +1338,13 @@ void PersistDisplayModeIfChanged() {
     g_displayMode = active;
     RuntimeConfigFile::SetDisplayMode(std::string(kDisplayModeConfigNames[static_cast<size_t>(active)]));
 }
+
+void ApplyInputBlockState() {
+    const bool blocked = controller_mapping_wizard::IsActive() || g_rebind.active ||
+                         g_exitPromptOpen || g_topBarVisible;
+    PADBlockInput(blocked);
+    InputBindings::SetInputBlocked(blocked);
+}
 } // namespace
 
 void InitializeRuntimeSettings() noexcept {
@@ -1385,6 +1392,7 @@ void HandleEvents(const AuroraEvent* events) noexcept {
         }
         if (!g_rebind.active && IsToggleKey(ev->sdl, SDL_SCANCODE_F10)) {
             SetTopBarVisible(!g_topBarVisible);
+            ApplyInputBlockState();
         }
         if (!g_rebind.active && g_muteHotkey != PAD_KEY_INVALID &&
             IsToggleKey(ev->sdl, static_cast<SDL_Scancode>(g_muteHotkey))) {
@@ -1400,6 +1408,7 @@ void HandleEvents(const AuroraEvent* events) noexcept {
             } else {
                 g_exitPromptOpen = true;
             }
+            ApplyInputBlockState();
         }
         if (IsMouseActivity(ev->sdl)) {
             g_lastMouseActivity = Clock::now();
@@ -1447,10 +1456,7 @@ void Draw() noexcept {
     DrawTopBar();
     DrawExitPrompt();
     controller_mapping_wizard::Draw();
-    // The wizard captures raw presses; keep them out of the game.
-    const bool inputBlocked = controller_mapping_wizard::IsActive() || g_rebind.active || g_exitPromptOpen;
-    PADBlockInput(inputBlocked);
-    InputBindings::SetInputBlocked(inputBlocked);
+    ApplyInputBlockState();
     DrawStartupScreen();
 }
 
