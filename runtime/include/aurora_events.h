@@ -60,15 +60,20 @@ inline void Flush(bool force = false) {
 // fiber re-enters runtime teardown and can fault while the fiber machinery is
 // still active.  A window close is an intentional successful exit, so end the
 // process directly and do not run the crash/atexit paths.
-[[noreturn]] inline void ExitForAuroraWindowClose(bool relaunch = false) noexcept {
+[[noreturn]] inline void ExitForAuroraWindowClose() noexcept {
     settings_overlay::ReleaseControllers();
     WindowPlacementPersistence::Flush(true);
-    if (relaunch) RuntimePlatform::RelaunchSelf();
 #if defined(_WIN32)
     ::ExitProcess(0);
 #else
     std::_Exit(EXIT_SUCCESS);
 #endif
+}
+
+// Returns only if the new instance could not be started, leaving this one running.
+inline void RestartForAuroraWindowClose() noexcept {
+    WindowPlacementPersistence::Flush(true);
+    if (RuntimePlatform::RelaunchSelf()) ExitForAuroraWindowClose();
 }
 
 // Update cached Aurora window/framebuffer dimensions based on pending events.

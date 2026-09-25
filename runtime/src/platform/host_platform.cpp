@@ -9,10 +9,18 @@
 #include <windows.h>
 #include <shlobj.h>
 #else
+#include <climits>
+#include <fcntl.h>
+#include <spawn.h>
 #include <unistd.h>
 #endif
 
+#if !defined(_WIN32) && !defined(__APPLE__)
+#include <dirent.h>
+#endif
+
 #if defined(__APPLE__)
+#include <crt_externs.h>
 #include <mach-o/dyld.h>
 #include <pwd.h>
 #endif
@@ -102,7 +110,36 @@ bool RelaunchSelf() noexcept {
     CloseHandle(process.hProcess);
     return true;
 #else
-    return false;
+    char path[PATH_MAX];
+    // Mark inherited descriptors close-on-exec, or the new instance keeps this one's sockets and devices open.
+#if defined(__APPLE__)
+    uint32_t size = sizeof(path);
+    if (_NSGetExecutablePath(path, &size) != 0) {
+        return false;
+    }
+    char** const env = *_NSGetEnviron();
+    for (int fd = 3, max = getdtablesize(); fd < max; ++fd) {
+        fcntl(fd, F_SETFD, FD_CLOEXEC);
+    }
+#else
+    const ssize_t length = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    if (length <= 0) {
+        return false;
+    }
+    path[length] = '\0';
+    char** const env = environ;
+    if (DIR* dir = opendir("/proc/self/fd")) {
+        while (const dirent* entry = readdir(dir)) {
+            if (const int fd = std::atoi(entry->d_name); fd > 2 && fd != dirfd(dir)) {
+                fcntl(fd, F_SETFD, FD_CLOEXEC);
+            }
+        }
+        closedir(dir);
+    }
+#endif
+    char* const argv[] = {path, nullptr};
+    pid_t pid = 0;
+    return posix_spawn(&pid, path, nullptr, nullptr, argv, env) == 0;
 #endif
 }
 

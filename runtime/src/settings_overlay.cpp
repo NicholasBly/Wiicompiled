@@ -1202,14 +1202,20 @@ void DrawStartupScreen() {
 void DrawExitPrompt() {
     constexpr const char* kTitle = "Exit";
     if (g_exitPromptOpen && !ImGui::IsPopupOpen(kTitle)) ImGui::OpenPopup(kTitle);
-    if (!ImGui::BeginPopupModal(kTitle, &g_exitPromptOpen, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    static bool restartFailed = false;
+    if (!ImGui::BeginPopupModal(kTitle, &g_exitPromptOpen, ImGuiWindowFlags_AlwaysAutoResize)) {
+        restartFailed = false;
+        return;
+    }
     ImGui::TextUnformatted("Quit the game?");
+    if (restartFailed) ImGui::TextDisabled("Could not restart.");
     if (ImGui::Button("Exit", ImVec2(120.0f, 0.0f))) ExitForAuroraWindowClose();
     ImGui::SameLine();
-#if defined(_WIN32)
-    if (ImGui::Button("Restart", ImVec2(120.0f, 0.0f))) ExitForAuroraWindowClose(true);
+    if (ImGui::Button("Restart", ImVec2(120.0f, 0.0f))) {
+        RestartForAuroraWindowClose();
+        restartFailed = true;
+    }
     ImGui::SameLine();
-#endif
     if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) g_exitPromptOpen = false;
     if (!g_exitPromptOpen) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
