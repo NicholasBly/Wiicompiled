@@ -748,21 +748,23 @@ std::unordered_map<SDL_JoystickID, PollRate> g_pollRates;
 bool g_pollRateWanted = false;
 bool g_pollRateActive = false;
 
-// Accel reports arrive once per HID report; only disable sensors enabled here, as Wii Remote motion shares them.
+// Accel reports arrive once per HID report; Wii Remotes are left to WiiRemoteInput, which owns their sensors.
 void UpdatePollRateSensors() {
-    if (g_pollRateWanted == g_pollRateActive) return;
-    g_pollRateActive = g_pollRateWanted;
-    if (g_pollRateActive) {
+    if (g_pollRateWanted) {
+        g_pollRateActive = true;
         for (uint32_t index = 0; index < PADCount(); ++index) {
             SDL_Gamepad* pad = PADGetSDLGamepadForIndex(index);
             if (pad && SDL_GamepadHasSensor(pad, SDL_SENSOR_ACCEL) &&
                 !SDL_GamepadSensorEnabled(pad, SDL_SENSOR_ACCEL) &&
+                WiiRemoteInput::KindForName(SDL_GetGamepadName(pad)) == WiiRemoteInput::Kind::NotWii &&
                 SDL_SetGamepadSensorEnabled(pad, SDL_SENSOR_ACCEL, true)) {
                 g_pollRates[SDL_GetGamepadID(pad)].ownsSensor = true;
             }
         }
         return;
     }
+    if (!g_pollRateActive) return;
+    g_pollRateActive = false;
     for (const auto& [id, rate] : g_pollRates) {
         if (SDL_Gamepad* pad = SDL_GetGamepadFromID(id); pad && rate.ownsSensor) {
             SDL_SetGamepadSensorEnabled(pad, SDL_SENSOR_ACCEL, false);
