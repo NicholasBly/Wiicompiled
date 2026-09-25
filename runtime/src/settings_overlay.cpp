@@ -1433,7 +1433,7 @@ void HandleEvents(const AuroraEvent* events) noexcept {
     }
 }
 
-void ReleaseControllers() noexcept {
+void ReleaseControllers(bool resetLeds) noexcept {
     // Aurora drives the LED white on first PADRead and never clears it, and the
     // exit paths terminate the process outright, so do it here.
     bool queued = false;
@@ -1441,7 +1441,7 @@ void ReleaseControllers() noexcept {
         const s32 index = PADGetIndexForPort(port);
         if (index < 0) continue;
         if (SDL_Gamepad* pad = PADGetSDLGamepadForIndex(static_cast<u32>(index))) {
-            SDL_SetGamepadLED(pad, 0, 0, 0);
+            if (resetLeds) SDL_SetGamepadLED(pad, 0, 0, 0);
             queued = true;
         }
     }

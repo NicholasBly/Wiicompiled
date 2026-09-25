@@ -110,11 +110,15 @@ bool RelaunchSelf() noexcept {
     CloseHandle(process.hProcess);
     return true;
 #else
-    char path[PATH_MAX];
+    std::string path;
     // Mark inherited descriptors close-on-exec, or the new instance keeps this one's sockets and devices open.
 #if defined(__APPLE__)
-    uint32_t size = sizeof(path);
-    if (_NSGetExecutablePath(path, &size) != 0) {
+    uint32_t size = 0;
+    if (_NSGetExecutablePath(nullptr, &size) != -1 || size == 0) {
+        return false;
+    }
+    path.resize(size);
+    if (_NSGetExecutablePath(path.data(), &size) != 0) {
         return false;
     }
     char** const env = *_NSGetEnviron();
@@ -122,11 +126,12 @@ bool RelaunchSelf() noexcept {
         fcntl(fd, F_SETFD, FD_CLOEXEC);
     }
 #else
-    const ssize_t length = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    path.resize(PATH_MAX);
+    const ssize_t length = readlink("/proc/self/exe", path.data(), path.size() - 1);
     if (length <= 0) {
         return false;
     }
-    path[length] = '\0';
+    path.resize(static_cast<size_t>(length));
     char** const env = environ;
     if (DIR* dir = opendir("/proc/self/fd")) {
         while (const dirent* entry = readdir(dir)) {
@@ -137,9 +142,9 @@ bool RelaunchSelf() noexcept {
         closedir(dir);
     }
 #endif
-    char* const argv[] = {path, nullptr};
+    char* const argv[] = {path.data(), nullptr};
     pid_t pid = 0;
-    return posix_spawn(&pid, path, nullptr, nullptr, argv, env) == 0;
+    return posix_spawn(&pid, path.c_str(), nullptr, nullptr, argv, env) == 0;
 #endif
 }
 
