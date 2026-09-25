@@ -1206,6 +1206,10 @@ void DrawExitPrompt() {
     ImGui::TextUnformatted("Quit the game?");
     if (ImGui::Button("Exit", ImVec2(120.0f, 0.0f))) ExitForAuroraWindowClose();
     ImGui::SameLine();
+#if defined(_WIN32)
+    if (ImGui::Button("Restart", ImVec2(120.0f, 0.0f))) ExitForAuroraWindowClose(true);
+    ImGui::SameLine();
+#endif
     if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) g_exitPromptOpen = false;
     if (!g_exitPromptOpen) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();

@@ -2,6 +2,7 @@
 
 #include "settings_overlay.h"
 #include "runtime_config.h"
+#include "platform/host_platform.h"
 
 #include <aurora/aurora.h>
 #include <aurora/event.h>
@@ -59,9 +60,10 @@ inline void Flush(bool force = false) {
 // fiber re-enters runtime teardown and can fault while the fiber machinery is
 // still active.  A window close is an intentional successful exit, so end the
 // process directly and do not run the crash/atexit paths.
-[[noreturn]] inline void ExitForAuroraWindowClose() noexcept {
+[[noreturn]] inline void ExitForAuroraWindowClose(bool relaunch = false) noexcept {
     settings_overlay::ReleaseControllers();
     WindowPlacementPersistence::Flush(true);
+    if (relaunch) RuntimePlatform::RelaunchSelf();
 #if defined(_WIN32)
     ::ExitProcess(0);
 #else

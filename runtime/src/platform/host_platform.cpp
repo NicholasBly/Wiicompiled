@@ -82,4 +82,28 @@ uint64_t CurrentProcessId() noexcept {
 #endif
 }
 
+bool RelaunchSelf() noexcept {
+#if defined(_WIN32)
+    std::wstring path(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+    if (length == 0 || length >= path.size()) {
+        return false;
+    }
+    path.resize(length);
+    std::wstring commandLine = GetCommandLineW();
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(path.c_str(), commandLine.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr,
+                        &startup, &process)) {
+        return false;
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return true;
+#else
+    return false;
+#endif
+}
+
 } // namespace RuntimePlatform

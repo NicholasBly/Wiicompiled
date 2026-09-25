@@ -23,4 +23,7 @@ std::filesystem::path LogDirectory(std::string_view applicationName);
 
 uint64_t CurrentProcessId() noexcept;
 
+// Starts a new instance with the current command line. False if unsupported or it fails.
+bool RelaunchSelf() noexcept;
+
 } // namespace RuntimePlatform
