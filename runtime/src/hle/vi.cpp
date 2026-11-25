@@ -10,6 +10,7 @@
 #include "runtime_log.h"
 #include "perf_stats.h"
 #include "latency_stats.h"
+#include "nvidia_reflex.h"
 #include "frame_pacing_setting.h"
 
 #include <dolphin/vi.h>
@@ -535,6 +536,7 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     // with it, and the latency overlay joins the two.
     const uint64_t sealedTag = s_frameTag.load(std::memory_order_relaxed);
     LatencyStats::Global().OnSeal(sealedTag, LatencyStats::NowNanos());
+    Reflex::OnSimulationEnd(sealedTag);
     aurora_set_frame_tag(sealedTag);
     Clock::time_point paceDeadline{};
     bool paceThisFrame = false;
@@ -589,8 +591,10 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     }
     settings_overlay::AdvancePresentedFrame();
     PerfStats::OnFramePresented();
-    // The next tick starts here: retraces were delivered by the pace above.
+    // The next tick starts here: retraces were delivered by the pace above. With Reflex on, its
+    // sleep can push the start (and the tick's controller read) a little later.
     s_frameTag.store(sealedTag + 1, std::memory_order_release);
+    Reflex::OnTickStart(sealedTag + 1);
     LatencyStats::Global().OnTickStart(sealedTag + 1, LatencyStats::NowNanos());
     g_auroraFrameActive.store(false, std::memory_order_release);
     g_auroraFrameHadWork.store(false, std::memory_order_release);

@@ -3,6 +3,7 @@
 #include "hle/controller_status_contract.h"
 #include "input_bindings.h"
 #include "latency_stats.h"
+#include "nvidia_reflex.h"
 #include "motion_trick.h"
 
 #include <algorithm>
@@ -127,7 +128,15 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
     for (const PADStatus& status : statuses) {
         flashHeld |= status.err == PAD_ERR_NONE && (status.button & PAD_BUTTON_A) != 0;
     }
-    LatencyStats::Global().OnInputSample(VI_HLE_CurrentFrameTag(), LatencyStats::NowNanos(), flashHeld);
+    const uint64_t frameTag = VI_HLE_CurrentFrameTag();
+    LatencyStats::Global().OnInputSample(frameTag, LatencyStats::NowNanos(), flashHeld);
+    Reflex::OnInputSample(frameTag);
+    // Reflex Latency Analyzer monitors time from this marker to the flash on screen.
+    static bool s_flashWasHeld = false;
+    if (flashHeld && !s_flashWasHeld) {
+        Reflex::OnFlash(frameTag);
+    }
+    s_flashWasHeld = flashHeld;
 
     try {
         for (uint32_t i = 0; i < PAD_CHANMAX; ++i) {

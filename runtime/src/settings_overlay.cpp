@@ -6,6 +6,7 @@
 #include "controller_mapping_wizard.h"
 #include "input_bindings.h"
 #include "latency_stats.h"
+#include "nvidia_reflex.h"
 #include "hle_stubs.h"
 #include "motion_trick.h"
 #include "game_graphics_options.h"
@@ -110,6 +111,7 @@ bool g_vsync = RuntimeConfigFile::Vsync();
 bool g_disableCopyFilter = RuntimeConfigFile::DisableCopyFilter(true);
 bool g_showFps = RuntimeConfigFile::ShowFps(true);
 bool g_latencyOverlay = RuntimeConfigFile::LatencyOverlay(false);
+int g_reflexMode = static_cast<int>(RuntimeConfigFile::ReflexMode(0));
 // Not saved: a white square in the corner is only wanted while measuring.
 bool g_latencyFlashTest = false;
 std::ofstream g_latencyCsv;
@@ -1319,6 +1321,21 @@ void DrawGraphicsSettings() {
     if (ImGui::Checkbox("Show FPS", &g_showFps)) {
         RuntimeConfigFile::SetShowFps(g_showFps);
     }
+    {
+        const char* reflexUnavailable = Reflex::UnsupportedReason();
+        constexpr std::array<const char*, 3> kReflexModes{"Off", "On", "On + Boost"};
+        ImGui::BeginDisabled(reflexUnavailable != nullptr);
+        if (ImGui::Combo("NVIDIA Reflex", &g_reflexMode, kReflexModes.data(), static_cast<int>(kReflexModes.size()))) {
+            Reflex::SetMode(static_cast<Reflex::Mode>(g_reflexMode));
+            RuntimeConfigFile::SetReflexMode(static_cast<uint32_t>(g_reflexMode));
+        }
+        ImGui::EndDisabled();
+        if (reflexUnavailable != nullptr) {
+            ImGui::TextDisabled("%s", reflexUnavailable);
+        } else if (static_cast<int>(Reflex::CurrentMode()) != g_reflexMode) {
+            ImGui::TextDisabled("The driver did not accept this Reflex mode.");
+        }
+    }
     if (ImGui::Checkbox("Latency overlay", &g_latencyOverlay)) {
         RuntimeConfigFile::SetLatencyOverlay(g_latencyOverlay);
     }
@@ -1345,6 +1362,18 @@ void DrawGraphicsSettings() {
 void OnAuroraFrameTiming(const AuroraFrameTimingEvent* event, void*) {
     if (event->type == AURORA_FRAME_PRESENT_END) {
         LatencyStats::Global().OnPresent(event->frameTag, event->timeNanos, event->slot < 0, event->first);
+    }
+    // Reflex sees one render-submit and one present pair per game frame: the native frame's.
+    if (event->slot < 0) {
+        Reflex::OnFrameTiming(event->frameTag, static_cast<uint32_t>(event->type));
+    }
+}
+
+const char* ReflexModeName(Reflex::Mode mode) {
+    switch (mode) {
+    case Reflex::Mode::On: return "On";
+    case Reflex::Mode::Boost: return "On + Boost";
+    default: return "Off";
     }
 }
 
@@ -1377,8 +1406,11 @@ void StartLatencyCsv() {
                              std::chrono::system_clock::now().time_since_epoch())
                              .count();
     // The name carries the settings so files from different runs compare at a glance.
+    const char* reflex = Reflex::CurrentMode() == Reflex::Mode::Boost ? "_reflexboost"
+                         : Reflex::CurrentMode() == Reflex::Mode::On  ? "_reflexon"
+                                                                      : "_reflexoff";
     g_latencyCsvPath = directory / ("latency_" + std::to_string(seconds) + "_" + PacingModeName(mode) + "_cap" +
-                                    std::to_string(cap) + (g_vsync ? "_vsync" : "_novsync") + ".csv");
+                                    std::to_string(cap) + (g_vsync ? "_vsync" : "_novsync") + reflex + ".csv");
     g_latencyCsv.open(g_latencyCsvPath, std::ios::out | std::ios::trunc);
     if (!g_latencyCsv.is_open()) {
         RT_LOG(RT_TAG_RUNTIME) << "Could not create latency CSV: " << g_latencyCsvPath.string() << std::endl;
@@ -1445,14 +1477,19 @@ void DrawLatencyOverlay() {
     if (ImGui::Begin("Latency Overlay", nullptr, kFlags)) {
         char capText[16];
         std::snprintf(capText, sizeof(capText), cap == 0 ? "display" : "%u", cap);
-        ImGui::Text("Pacing %s  |  cap %s  |  aiming %.0f fps  |  VSync %s  |  %.0f Hz display",
-                    PacingModeName(mode), capText, aimFps, g_vsync ? "on" : "off", refreshRate);
+        ImGui::Text("Pacing %s  |  cap %s  |  aiming %.0f fps  |  VSync %s  |  Reflex %s  |  %.0f Hz display",
+                    PacingModeName(mode), capText, aimFps, g_vsync ? "on" : "off",
+                    ReflexModeName(Reflex::CurrentMode()), refreshRate);
         ImGui::Text("Shown: %.1f fps", summary.presentFps);
         ImGui::Separator();
         DrawLatencyStat("Read -> first frame", summary.inputToFirst);
         DrawLatencyStat("Read -> full frame", summary.inputToNative);
         DrawLatencyStat("Game tick (CPU)", summary.tickCpu);
         DrawLatencyStat("Frame time", summary.presentInterval);
+        if (Reflex::LatencyReport reflex; Reflex::LatestLatency(reflex)) {
+            ImGui::Text("Reflex (driver):  read -> GPU done %.1f ms  |  tick -> GPU done %.1f ms  |  GPU busy %.1f ms",
+                        reflex.inputToGpuEndMs, reflex.simToGpuEndMs, reflex.gpuActiveMs);
+        }
         if (!summary.recentIntervalsMs.empty()) {
             const float expected = summary.presentInterval.avgMs > 0.0 ? static_cast<float>(summary.presentInterval.avgMs) : 16.7f;
             ImGui::PlotLines("##frametimes", summary.recentIntervalsMs.data(),
@@ -1817,6 +1854,7 @@ void InitializeRuntimeSettings() noexcept {
     aurora_set_disable_copy_filter(g_disableCopyFilter);
     aurora_set_skip_unready_pipelines(g_skipUnreadyPipelines);
     aurora_set_frame_timing_callback(OnAuroraFrameTiming, nullptr);
+    Reflex::SetMode(static_cast<Reflex::Mode>(g_reflexMode));
     g_strapInputAccepted.store(false, std::memory_order_relaxed);
     g_startupDismissFrame.store(UINT64_MAX, std::memory_order_relaxed);
     g_bootShadersReady.store(false, std::memory_order_relaxed);

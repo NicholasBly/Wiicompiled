@@ -301,6 +301,13 @@ target_include_directories(mkw_frame_pacing_setting_tests PRIVATE "${MKW_TEST_RU
 target_compile_features(mkw_frame_pacing_setting_tests PRIVATE cxx_std_20)
 add_test(NAME mkw_frame_pacing_setting_tests COMMAND mkw_frame_pacing_setting_tests)
 
+add_executable(mkw_nvidia_reflex_tests
+    "${MKW_TEST_RUNTIME_DIR}/tests/nvidia_reflex_tests.cpp"
+    "${MKW_TEST_RUNTIME_DIR}/src/nvidia_reflex.cpp")
+target_include_directories(mkw_nvidia_reflex_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/include")
+target_compile_features(mkw_nvidia_reflex_tests PRIVATE cxx_std_20)
+add_test(NAME mkw_nvidia_reflex_tests COMMAND mkw_nvidia_reflex_tests)
+
 add_executable(mkw_latency_stats_tests
     "${MKW_TEST_RUNTIME_DIR}/tests/latency_stats_tests.cpp"
     "${MKW_TEST_RUNTIME_DIR}/src/latency_stats.cpp")
