@@ -23,6 +23,7 @@
 #include <toml.hpp>
 #include "platform/host_platform.h"
 #include "host_file.h"
+#include "frame_pacing_setting.h"
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -45,7 +46,10 @@ struct RuntimeUserConfig {
     std::optional<float> resolutionMultiplier;
     std::optional<std::string> graphicsApi;
     std::optional<std::string> displayMode;
+    // Older interpolation target; only read to migrate into frame pacing.
     std::optional<uint32_t> frameInterpolationFps;
+    std::optional<uint32_t> framePacingMode;
+    std::optional<uint32_t> frameRateCap;
     std::optional<bool> metalFxSpatialUpscaling;
     std::optional<bool> skipUnreadyPipelines;
     std::optional<bool> vsync;
@@ -171,12 +175,6 @@ inline bool IsSupportedDisplayMode(std::string_view value) {
         "windowed", "borderless", "exclusive",
     };
     return std::find(values.begin(), values.end(), value) != values.end();
-}
-
-// 240 was offered by an early build and is no longer supported; a saved 240 is
-// migrated to 180 at the parse site.
-inline bool IsSupportedFrameInterpolationFps(uint32_t value) {
-    return value == 0 || value == 120 || value == 180;
 }
 
 inline std::optional<std::filesystem::path> ExecutableDirectory() {
@@ -478,12 +476,9 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
         value && IsSupportedDisplayMode(*value)) {
         config.displayMode = *value;
     }
-    if (auto value = FindConfigUint(document, "video", "frame_interpolation_fps")) {
-        const uint32_t migrated = *value == 240u ? 180u : *value;
-        if (IsSupportedFrameInterpolationFps(migrated)) {
-            config.frameInterpolationFps = migrated;
-        }
-    }
+    config.frameInterpolationFps = FindConfigUint(document, "video", "frame_interpolation_fps");
+    config.framePacingMode = FindConfigUint(document, "video", "frame_pacing_mode");
+    config.frameRateCap = FindConfigUint(document, "video", "frame_rate_cap");
     config.metalFxSpatialUpscaling =
         FindConfigValue<bool>(document, "video", "metalfx_spatial_upscaling");
     config.skipUnreadyPipelines = FindConfigValue<bool>(document, "video", "skip_unready_pipelines");
@@ -683,12 +678,15 @@ inline bool SetWindowPosition(int32_t x, int32_t y) {
     return wroteX && wroteY;
 }
 
-inline bool SetFrameInterpolationFps(uint32_t value) {
-    if (!IsSupportedFrameInterpolationFps(value)) {
+inline bool SetFramePacing(FramePacingSetting::Setting value) {
+    if (!FramePacingSetting::IsSupportedMode(value.mode) || !FramePacingSetting::IsSupportedCap(value.cap)) {
         return false;
     }
-    Mutable().frameInterpolationFps = value;
-    return WriteSetting("video", "frame_interpolation_fps", std::to_string(value));
+    Mutable().framePacingMode = value.mode;
+    Mutable().frameRateCap = value.cap;
+    const bool wroteMode = WriteSetting("video", "frame_pacing_mode", std::to_string(value.mode));
+    const bool wroteCap = WriteSetting("video", "frame_rate_cap", std::to_string(value.cap));
+    return wroteMode && wroteCap;
 }
 
 inline bool SetMetalFxSpatialUpscaling(bool value) {
@@ -1038,9 +1036,10 @@ inline bool SetWiiRumbleEnabled(bool value) {
     return WriteSetting("controller", "wii_rumble", value ? "true" : "false");
 }
 
-// Target frame rate for frame interpolation, or 0 to disable it.
-inline uint32_t FrameInterpolationFps(uint32_t fallback = 0) {
-    return Get().frameInterpolationFps.value_or(fallback);
+// Inserted-present pacing and its frame-rate cap (see frame_pacing_setting.h).
+inline FramePacingSetting::Setting FramePacing() {
+    const auto& config = Get();
+    return FramePacingSetting::Resolve(config.framePacingMode, config.frameRateCap, config.frameInterpolationFps);
 }
 
 // Whether to skip draws whose graphics pipeline has not finished compiling yet.
@@ -1165,6 +1164,12 @@ inline void LogLoadedConfig() {
             }
             if (config.frameInterpolationFps) {
                 std::cout << " frame_interpolation_fps=" << *config.frameInterpolationFps;
+            }
+            if (config.framePacingMode) {
+                std::cout << " frame_pacing_mode=" << *config.framePacingMode;
+            }
+            if (config.frameRateCap) {
+                std::cout << " frame_rate_cap=" << *config.frameRateCap;
             }
             if (config.skipUnreadyPipelines) {
                 std::cout << " skip_unready_pipelines=" << (*config.skipUnreadyPipelines ? "true" : "false");

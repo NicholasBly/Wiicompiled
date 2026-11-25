@@ -303,6 +303,11 @@ target_include_directories(mkw_late_tick_start_tests PRIVATE "${MKW_TEST_RUNTIME
 target_compile_features(mkw_late_tick_start_tests PRIVATE cxx_std_20)
 add_test(NAME mkw_late_tick_start_tests COMMAND mkw_late_tick_start_tests)
 
+add_executable(mkw_frame_pacing_setting_tests "${MKW_TEST_RUNTIME_DIR}/tests/frame_pacing_setting_tests.cpp")
+target_include_directories(mkw_frame_pacing_setting_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/include")
+target_compile_features(mkw_frame_pacing_setting_tests PRIVATE cxx_std_20)
+add_test(NAME mkw_frame_pacing_setting_tests COMMAND mkw_frame_pacing_setting_tests)
+
 # The emulated Bluetooth controller is pure host code.
 add_executable(mkw_bluetooth_controller_tests
     "${MKW_TEST_RUNTIME_DIR}/tests/bluetooth_controller_tests.cpp"

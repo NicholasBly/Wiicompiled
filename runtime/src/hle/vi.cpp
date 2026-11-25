@@ -10,6 +10,7 @@
 #include "runtime_log.h"
 #include "perf_stats.h"
 #include "late_tick_start.h"
+#include "frame_pacing_setting.h"
 
 #include <dolphin/vi.h>
 
@@ -594,7 +595,6 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     bool paceThisFrame = false;
     uint32_t retracesElapsed = 0;
     if (paceToRetrace) {
-        uint64_t baseNanos = 0;
         uint64_t intervalNanos = 0;
         uint32_t retraceCount = 0;
         {
@@ -602,10 +602,6 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
             EnsureInitializedLocked();
             paceDeadline = g_vi.lastRetrace + g_vi.retraceInterval;
             retraceCount = g_vi.retraceCount;
-            baseNanos = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    g_vi.lastRetrace.time_since_epoch())
-                    .count());
             intervalNanos = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(g_vi.retraceInterval)
                     .count());
@@ -624,17 +620,14 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
         // elapsed; 2+ means a boundary was missed, so Aurora seals that frame without its interpolated
         // slots (a windowed backstop lowers the slot target only under sustained overload).
         aurora_report_producer_paced(retracesElapsed <= 1);
-        // Stamp the sealed frame's presentation schedule so Aurora paces interpolated slots against
-        // this same VI timeline. Anchor to the NEXT retrace boundary, not the period just produced,
-        // since slots anchored to the current period would already be expired by seal time. Encoding
-        // overruns are corrected by sliding the whole slot group forward onto a later boundary of this
-        // same grid, so this stays the single cadence authority. Anchors must also be strictly
-        // monotonic: two frames sealed before lastRetrace advances would collide on one boundary and
-        // burst-present, so a colliding anchor steps onto the next grid point instead of repeating it.
-        uint64_t anchorNanos = baseNanos + intervalNanos;
-        if (s_lastPresentAnchorNanos != 0 && anchorNanos <= s_lastPresentAnchorNanos) {
-            anchorNanos = s_lastPresentAnchorNanos + intervalNanos;
-        }
+        // Stamp the sealed frame's presentation schedule: its presents may start now, at the seal,
+        // on this VI timeline's interval. Waiting for the next retrace boundary instead would hold
+        // every new frame back most of an interval. NextPresentAnchor keeps the phase from
+        // jittering when one frame seals late.
+        const uint64_t sealNanos = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count());
+        const uint64_t anchorNanos =
+            FramePacingSetting::NextPresentAnchor(sealNanos, s_lastPresentAnchorNanos, intervalNanos);
         s_lastPresentAnchorNanos = anchorNanos;
         aurora_set_present_schedule(anchorNanos, intervalNanos);
     } else {
