@@ -164,9 +164,21 @@ void DrawThreadSleepCountsOnlyAfterTheRead() {
     Check(recorder.PadThread() == 0x80001000 && recorder.DrawThread() == 0x80002000, "threads are kept");
 }
 
+void WorkBeforeTheWaitIsTickStartToFirstSleep() {
+    Recorder recorder;
+    recorder.OnTickStart(1, kBase);
+    recorder.OnInputSample(1, kBase + 1 * kMs, false);
+    recorder.OnDrawThreadSleepStart(1, kBase + 2 * kMs);
+    recorder.OnDrawThreadSleepStart(1, kBase + 9 * kMs);   // later sleeps don't move it
+    recorder.OnSeal(1, kBase + 16 * kMs);
+    recorder.OnPresent(1, kBase + 17 * kMs, true, true);
+    Check(Near(recorder.Summarize().workBeforeWait.avgMs, 2.0), "tick start -> first sleep is 2 ms");
+}
+
 } // namespace
 
 int main() {
+    WorkBeforeTheWaitIsTickStartToFirstSleep();
     DrawThreadSleepCountsOnlyAfterTheRead();
     BreakdownShowsWhereTheTickGoes();
     InterpolatedFrameReportsFirstAndNativeLatency();

@@ -405,6 +405,7 @@ extern "C" void OSSleepThread_HLE_801aa9b8(CpuContext* ctx)
             if (drawThread) {
                 tag = VI_HLE_CurrentFrameTag();
                 start = LatencyStats::NowNanos();
+                LatencyStats::Global().OnDrawThreadSleepStart(tag, start);
             }
         }
         ~DrawThreadSleepTimer() {

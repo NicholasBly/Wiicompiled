@@ -112,6 +112,7 @@ bool g_disableCopyFilter = RuntimeConfigFile::DisableCopyFilter(true);
 bool g_showFps = RuntimeConfigFile::ShowFps(true);
 bool g_latencyOverlay = RuntimeConfigFile::LatencyOverlay(false);
 int g_reflexMode = static_cast<int>(RuntimeConfigFile::ReflexMode(0));
+bool g_lateTickStart = RuntimeConfigFile::LateTickStart(false);
 // Not saved: a white square in the corner is only wanted while measuring.
 bool g_latencyFlashTest = false;
 std::ofstream g_latencyCsv;
@@ -1263,7 +1264,13 @@ void DrawGraphicsSettings() {
             aurora_set_display_mode(AURORA_DISPLAY_MODE_EXCLUSIVE);
         }
     }
+    if (ImGui::Checkbox("Late tick start (lower input lag, experimental)", &g_lateTickStart)) {
+        VI_HLE_SetLateTickStart(g_lateTickStart);
+        RuntimeConfigFile::SetLateTickStart(g_lateTickStart);
+    }
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 380.0f);
+    ImGui::TextDisabled("Starts each game tick just before the game needs it, so your input is read "
+                        "about 12 ms later and shows up sooner. If you see stutter, turn it off.");
     if (g_framePacing.mode == FramePacingSetting::kSmooth) {
         ImGui::TextDisabled("Blends between game frames. Shows each new game frame a little later "
                             "(up to one frame at the cap rate).");
@@ -1489,6 +1496,13 @@ void DrawLatencyOverlay() {
         DrawLatencyStat("  drawn -> handed over", summary.drawDoneToSeal);
         DrawLatencyStat("  waiting for retrace", summary.retraceWait);
         DrawLatencyStat("  draw thread asleep", summary.drawThreadSleep);
+        DrawLatencyStat("  work before the wait", summary.workBeforeWait);
+        if (g_lateTickStart) {
+            double heldMs = 0.0;
+            double leadMs = 0.0;
+            VI_HLE_LateTickStartInfo(heldMs, leadMs);
+            ImGui::Text("Late tick start: held %.1f ms, starting %.1f ms before the retrace", heldMs, leadMs);
+        }
         {
             const uint32_t padThread = LatencyStats::Global().PadThread();
             const uint32_t drawThread = LatencyStats::Global().DrawThread();
@@ -1867,6 +1881,7 @@ void InitializeRuntimeSettings() noexcept {
     aurora_set_disable_copy_filter(g_disableCopyFilter);
     aurora_set_skip_unready_pipelines(g_skipUnreadyPipelines);
     aurora_set_frame_timing_callback(OnAuroraFrameTiming, nullptr);
+    VI_HLE_SetLateTickStart(g_lateTickStart);
     Reflex::SetMode(static_cast<Reflex::Mode>(g_reflexMode));
     g_strapInputAccepted.store(false, std::memory_order_relaxed);
     g_startupDismissFrame.store(UINT64_MAX, std::memory_order_relaxed);

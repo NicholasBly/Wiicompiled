@@ -495,7 +495,8 @@ std::atomic<uint64_t> s_frameTag{1};
 
 // Sleeps to the same VI retrace boundary VIWaitForRetrace targets, servicing alarms every 1 ms so audio
 // DMA and timers keep running, then delivers that retrace so guest logic starts exactly on the grid.
-void PaceToRetraceBoundary(Clock::time_point deadline) {
+// Holds the producer until `deadline` while keeping alarms and audio serviced.
+void HoldUntil(Clock::time_point deadline) {
     constexpr auto kServiceSlice = 1ms;
     for (;;) {
         const auto now = Clock::now();
@@ -515,8 +516,20 @@ void PaceToRetraceBoundary(Clock::time_point deadline) {
         SleepPreciselyUntil(deadline, true, kFinalSpinWindow);
         break;
     }
+}
+
+void PaceToRetraceBoundary(Clock::time_point deadline) {
+    HoldUntil(deadline);
     VI_HLE_ProcessRetracesDeferred(1);
 }
+
+// Late tick start. Mario Kart Wii reads the controller at the start of its tick, works about a
+// millisecond, then waits for the next retrace before drawing, so the read sits unused most of an
+// interval. Holding the tick until shortly before that retrace moves the read next to the draw.
+std::atomic<bool> s_lateTickStart{false};
+std::atomic<double> s_lateTickHeldMs{0.0};
+std::atomic<double> s_lateTickLeadMs{0.0};
+double s_lateTickMissPenaltyMs = 0.0;
 
 } // namespace
 
@@ -524,6 +537,13 @@ void PaceToRetraceBoundary(Clock::time_point deadline) {
 // producer to the VI retrace boundary, and pre-warms the next frame. Paced from GXCopyDisp; unpaced for
 // the retrace-context black/boot present path in AdvanceRetrace.
 uint64_t VI_HLE_CurrentFrameTag() { return s_frameTag.load(std::memory_order_acquire); }
+
+void VI_HLE_SetLateTickStart(bool enabled) { s_lateTickStart.store(enabled, std::memory_order_relaxed); }
+
+void VI_HLE_LateTickStartInfo(double& heldMs, double& leadMs) {
+    heldMs = s_lateTickHeldMs.load(std::memory_order_relaxed);
+    leadMs = s_lateTickLeadMs.load(std::memory_order_relaxed);
+}
 
 uint32_t VI_HLE_CurrentGuestThread() {
     return Fiber::GuestFiberManager::IsInitialized() ? Fiber::GuestFiberManager::GetCurrentGuestThread() : 0;
@@ -544,8 +564,9 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     aurora_set_frame_tag(sealedTag);
     Clock::time_point paceDeadline{};
     bool paceThisFrame = false;
+    uint64_t intervalNanos = 0;
+    uint32_t retracesElapsed = 0;
     if (paceToRetrace) {
-        uint64_t intervalNanos = 0;
         uint32_t retraceCount = 0;
         {
             std::lock_guard<std::mutex> lock(g_viMutex);
@@ -561,7 +582,7 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
         // immediately: hardware would quantize down to the next vblank here,
         // but free-running late frames matches the previous pacer and keeps a
         // heavy scene at e.g. 50 fps instead of hard 30.
-        const uint32_t retracesElapsed = retraceCount - s_lastPacedRetraceCount;
+        retracesElapsed = retraceCount - s_lastPacedRetraceCount;
         paceThisFrame = retracesElapsed == 0;
         s_lastPacedRetraceCount = retraceCount;
         // aurora_report_producer_paced needs a different signal than the pace-wait above: the guest
@@ -592,6 +613,34 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
         PaceToRetraceBoundary(paceDeadline);
         std::lock_guard<std::mutex> lock(g_viMutex);
         s_lastPacedRetraceCount = g_vi.retraceCount;
+    }
+    if (paceToRetrace && s_lateTickStart.load(std::memory_order_relaxed)) {
+        // A frame that missed its retrace widens the lead by 2 ms; it narrows back 0.05 ms a frame.
+        s_lateTickMissPenaltyMs = retracesElapsed >= 2 ? std::min(s_lateTickMissPenaltyMs + 2.0, 8.0)
+                                                       : std::max(s_lateTickMissPenaltyMs - 0.05, 0.0);
+        const auto work = LatencyStats::Global().Summarize(60).workBeforeWait;
+        const uint64_t lead =
+            work.count >= 10 ? FramePacingSetting::LateStartLeadNanos(work.p99Ms, s_lateTickMissPenaltyMs, intervalNanos)
+                             : 0;
+        double heldMs = 0.0;
+        if (lead != 0) {
+            Clock::time_point nextRetrace;
+            {
+                std::lock_guard<std::mutex> lock(g_viMutex);
+                nextRetrace = g_vi.lastRetrace + g_vi.retraceInterval;
+            }
+            const auto holdUntil = nextRetrace - std::chrono::nanoseconds(lead);
+            const auto now = Clock::now();
+            if (holdUntil > now) {
+                HoldUntil(holdUntil);
+                heldMs = std::chrono::duration<double, std::milli>(holdUntil - now).count();
+            }
+        }
+        s_lateTickHeldMs.store(heldMs, std::memory_order_relaxed);
+        s_lateTickLeadMs.store(static_cast<double>(lead) / 1e6, std::memory_order_relaxed);
+    } else {
+        s_lateTickHeldMs.store(0.0, std::memory_order_relaxed);
+        s_lateTickLeadMs.store(0.0, std::memory_order_relaxed);
     }
     settings_overlay::AdvancePresentedFrame();
     PerfStats::OnFramePresented();

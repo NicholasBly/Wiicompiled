@@ -21,6 +21,10 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace);
 uint64_t VI_HLE_CurrentFrameTag();
 // OSThread address of the guest thread running now (0 before the scheduler starts).
 uint32_t VI_HLE_CurrentGuestThread();
+// Late tick start (lower input lag): hold each tick until shortly before the retrace it waits for.
+void VI_HLE_SetLateTickStart(bool enabled);
+// Last tick's hold and the lead it kept before the retrace, in ms.
+void VI_HLE_LateTickStartInfo(double& heldMs, double& leadMs);
 bool VI_HLE_IsAdvancingRetrace();
 void VI_HLE_SetXfbReady(uint32_t xfbAddr); // Called by GXCopyDisp to signal EFB→XFB copy
 void Audio_HLE_Tick(CpuContext* ctx, uint32_t deltaMicros);

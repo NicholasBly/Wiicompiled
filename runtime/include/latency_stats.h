@@ -33,6 +33,8 @@ struct Summary {
     Stat retraceWait;
     // Time the drawing thread slept (blocked waiting) between the controller read and the seal.
     Stat drawThreadSleep;
+    // Tick start -> the drawing thread's first sleep: the work done before the game waits.
+    Stat workBeforeWait;
     // Time between consecutive presents, inserted ones included.
     Stat presentInterval;
     double presentFps = 0.0;
@@ -50,6 +52,7 @@ struct FrameRow {
     uint64_t drawDoneNs = 0;
     uint64_t retraceWaitNs = 0;
     uint64_t drawThreadSleepNs = 0;
+    uint64_t firstSleepNs = 0;
     bool flash = false;
 };
 
@@ -65,6 +68,8 @@ public:
     void AddRetraceWait(uint64_t tag, uint64_t durationNs);
     // Adds one sleep of the drawing thread; counts only between the read and the seal.
     void AddDrawThreadSleep(uint64_t tag, uint64_t durationNs);
+    // The drawing thread starts to sleep; the first one after the read counts.
+    void OnDrawThreadSleepStart(uint64_t tag, uint64_t ns);
     // Guest threads (OSThread addresses) that read the controller and that draw.
     void NotePadThread(uint32_t thread) { m_padThread.store(thread, std::memory_order_relaxed); }
     void NoteDrawThread(uint32_t thread) { m_drawThread.store(thread, std::memory_order_relaxed); }

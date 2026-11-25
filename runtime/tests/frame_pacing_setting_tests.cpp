@@ -55,9 +55,22 @@ void AnchorPhaseSlidesBackAfterASlowFrame() {
     Check(anchor - seal == 1'000 * kUs, "four frames later it has slid back 1 ms");
 }
 
+void LateStartLeadCoversTheWorkWithAMargin() {
+    using FramePacingSetting::LateStartLeadNanos;
+    // 1.2 ms of work before the wait, plus a 2 ms margin.
+    Check(LateStartLeadNanos(1.2, 0.0, kInterval) == 3'200 * kUs, "lead = work + 2 ms");
+    // Never under 3 ms, never more than the interval less 2 ms.
+    Check(LateStartLeadNanos(0.1, 0.0, kInterval) == 3'000 * kUs, "lead floor is 3 ms");
+    Check(LateStartLeadNanos(20.0, 0.0, kInterval) == kInterval - 2'000 * kUs, "lead ceiling");
+    // A recent missed frame adds its penalty.
+    Check(LateStartLeadNanos(1.2, 2.0, kInterval) == 5'200 * kUs, "penalty widens the lead");
+    Check(LateStartLeadNanos(1.0, 0.0, 0) == 0, "no interval, no hold");
+}
+
 } // namespace
 
 int main() {
+    LateStartLeadCoversTheWorkWithAMargin();
     AnchorFollowsTheSealTime();
     AnchorPhaseSlidesBackAfterASlowFrame();
     using std::nullopt;

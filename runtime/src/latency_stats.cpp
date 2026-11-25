@@ -82,6 +82,14 @@ void Recorder::AddDrawThreadSleep(uint64_t tag, uint64_t durationNs) {
     }
 }
 
+void Recorder::OnDrawThreadSleepStart(uint64_t tag, uint64_t ns) {
+    std::lock_guard lock(m_mutex);
+    if (FrameRow* frame = Find(tag); frame != nullptr && frame->inputNs != 0 && frame->sealNs == 0 &&
+                                     frame->firstSleepNs == 0) {
+        frame->firstSleepNs = ns;
+    }
+}
+
 void Recorder::OnPresent(uint64_t tag, uint64_t ns, bool native, bool first) {
     std::lock_guard lock(m_mutex);
     if (m_lastPresentNs != 0 && ns > m_lastPresentNs) {
@@ -120,6 +128,7 @@ Summary Recorder::Summarize(uint32_t frames) const {
     std::vector<double> drawDoneToSeal;
     std::vector<double> retraceWait;
     std::vector<double> drawThreadSleep;
+    std::vector<double> workBeforeWait;
     const size_t take = std::min<size_t>(frames, m_completed.size());
     for (size_t i = m_completed.size() - take; i < m_completed.size(); ++i) {
         const FrameRow* frame = Find(m_completed[i]);
@@ -134,6 +143,9 @@ Summary Recorder::Summarize(uint32_t frames) const {
             tickCpu.push_back(Milliseconds(frame->tickStartNs, frame->sealNs));
             retraceWait.push_back(static_cast<double>(frame->retraceWaitNs) / 1e6);
             drawThreadSleep.push_back(static_cast<double>(frame->drawThreadSleepNs) / 1e6);
+            if (frame->firstSleepNs != 0) {
+                workBeforeWait.push_back(Milliseconds(frame->tickStartNs, frame->firstSleepNs));
+            }
         }
         if (frame->drawDoneNs != 0 && frame->sealNs != 0) {
             drawDoneToSeal.push_back(Milliseconds(frame->drawDoneNs, frame->sealNs));
@@ -151,6 +163,7 @@ Summary Recorder::Summarize(uint32_t frames) const {
     summary.drawDoneToSeal = Describe(drawDoneToSeal);
     summary.retraceWait = Describe(retraceWait);
     summary.drawThreadSleep = Describe(drawThreadSleep);
+    summary.workBeforeWait = Describe(workBeforeWait);
     summary.recentIntervalsMs.reserve(m_intervalCount);
     std::vector<double> intervals;
     intervals.reserve(m_intervalCount);

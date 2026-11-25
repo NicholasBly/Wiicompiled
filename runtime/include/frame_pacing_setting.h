@@ -60,4 +60,26 @@ inline uint64_t NextPresentAnchor(uint64_t sealNanos, uint64_t previousNanos, ui
     return sealNanos > earliest ? sealNanos : earliest;
 }
 
+// Late tick start: how long before the next retrace the game's tick should start, so it reads the
+// controller, does the work it does before waiting for that retrace, and then waits only briefly.
+// `workP99Ms`: tick start -> the drawing thread's first wait. `missPenaltyMs`: extra room after a
+// frame that missed its retrace. 0 = don't hold.
+inline uint64_t LateStartLeadNanos(double workP99Ms, double missPenaltyMs, uint64_t intervalNanos) {
+    constexpr double kMarginMs = 2.0;
+    constexpr uint64_t kFloorNanos = 3'000'000;
+    constexpr uint64_t kHeadroomNanos = 2'000'000;
+    if (intervalNanos <= kFloorNanos + kHeadroomNanos) {
+        return 0;
+    }
+    const double leadMs = workP99Ms + missPenaltyMs + kMarginMs;
+    uint64_t lead = leadMs > 0.0 ? static_cast<uint64_t>(leadMs * 1e6 + 0.5) : 0;
+    if (lead < kFloorNanos) {
+        lead = kFloorNanos;
+    }
+    if (lead > intervalNanos - kHeadroomNanos) {
+        lead = intervalNanos - kHeadroomNanos;
+    }
+    return lead;
+}
+
 } // namespace FramePacingSetting
