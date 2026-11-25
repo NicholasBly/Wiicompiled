@@ -19,6 +19,8 @@ void VI_HLE_WaitForNextRetracePoll();
 void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace);
 // Tag of the frame the game is producing now; advances when VI_HLE_PresentFrame seals one.
 uint64_t VI_HLE_CurrentFrameTag();
+// OSThread address of the guest thread running now (0 before the scheduler starts).
+uint32_t VI_HLE_CurrentGuestThread();
 bool VI_HLE_IsAdvancingRetrace();
 void VI_HLE_SetXfbReady(uint32_t xfbAddr); // Called by GXCopyDisp to signal EFB→XFB copy
 void Audio_HLE_Tick(CpuContext* ctx, uint32_t deltaMicros);

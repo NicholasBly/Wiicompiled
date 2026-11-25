@@ -1488,6 +1488,16 @@ void DrawLatencyOverlay() {
         DrawLatencyStat("  read -> drawn", summary.inputToDrawDone);
         DrawLatencyStat("  drawn -> handed over", summary.drawDoneToSeal);
         DrawLatencyStat("  waiting for retrace", summary.retraceWait);
+        DrawLatencyStat("  draw thread asleep", summary.drawThreadSleep);
+        {
+            const uint32_t padThread = LatencyStats::Global().PadThread();
+            const uint32_t drawThread = LatencyStats::Global().DrawThread();
+            ImGui::Text("Controller read on: %s (pad 0x%08X, draw 0x%08X)",
+                        padThread == 0 || drawThread == 0 ? "--"
+                        : padThread == drawThread         ? "the drawing thread"
+                                                          : "another thread",
+                        padThread, drawThread);
+        }
         DrawLatencyStat("Frame time", summary.presentInterval);
         if (Reflex::LatencyReport reflex; Reflex::LatestLatency(reflex)) {
             ImGui::Text("Reflex (driver):  read -> GPU done %.1f ms  |  tick -> GPU done %.1f ms  |  GPU busy %.1f ms",

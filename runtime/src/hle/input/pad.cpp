@@ -130,6 +130,7 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
     }
     const uint64_t frameTag = VI_HLE_CurrentFrameTag();
     LatencyStats::Global().OnInputSample(frameTag, LatencyStats::NowNanos(), flashHeld);
+    LatencyStats::Global().NotePadThread(VI_HLE_CurrentGuestThread());
     Reflex::OnInputSample(frameTag);
     // Reflex Latency Analyzer monitors time from this marker to the flash on screen.
     static bool s_flashWasHeld = false;

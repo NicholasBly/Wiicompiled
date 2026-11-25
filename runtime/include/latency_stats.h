@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -30,6 +31,8 @@ struct Summary {
     Stat drawDoneToSeal;
     // Time the game spent inside VIWaitForRetrace during the tick.
     Stat retraceWait;
+    // Time the drawing thread slept (blocked waiting) between the controller read and the seal.
+    Stat drawThreadSleep;
     // Time between consecutive presents, inserted ones included.
     Stat presentInterval;
     double presentFps = 0.0;
@@ -46,6 +49,7 @@ struct FrameRow {
     uint64_t nativePresentNs = 0;
     uint64_t drawDoneNs = 0;
     uint64_t retraceWaitNs = 0;
+    uint64_t drawThreadSleepNs = 0;
     bool flash = false;
 };
 
@@ -59,6 +63,13 @@ public:
     void OnDrawDone(uint64_t tag, uint64_t ns);
     // Adds one VIWaitForRetrace call's duration.
     void AddRetraceWait(uint64_t tag, uint64_t durationNs);
+    // Adds one sleep of the drawing thread; counts only between the read and the seal.
+    void AddDrawThreadSleep(uint64_t tag, uint64_t durationNs);
+    // Guest threads (OSThread addresses) that read the controller and that draw.
+    void NotePadThread(uint32_t thread) { m_padThread.store(thread, std::memory_order_relaxed); }
+    void NoteDrawThread(uint32_t thread) { m_drawThread.store(thread, std::memory_order_relaxed); }
+    uint32_t PadThread() const { return m_padThread.load(std::memory_order_relaxed); }
+    uint32_t DrawThread() const { return m_drawThread.load(std::memory_order_relaxed); }
     // Every present that reached the display; `first` is the frame's first one.
     void OnPresent(uint64_t tag, uint64_t ns, bool native, bool first);
 
@@ -86,6 +97,8 @@ private:
     size_t m_intervalWrite = 0;
     uint64_t m_lastPresentNs = 0;
     bool m_collectRows = false;
+    std::atomic<uint32_t> m_padThread{0};
+    std::atomic<uint32_t> m_drawThread{0};
     std::vector<FrameRow> m_rows;
 };
 

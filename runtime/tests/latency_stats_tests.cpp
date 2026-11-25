@@ -148,9 +148,26 @@ void BreakdownShowsWhereTheTickGoes() {
     Check(Near(summary.retraceWait.avgMs, 12.0), "retrace waits add up to 12 ms");
 }
 
+void DrawThreadSleepCountsOnlyAfterTheRead() {
+    Recorder recorder;
+    recorder.OnTickStart(1, kBase);
+    recorder.AddDrawThreadSleep(1, 4 * kMs);   // before the read: not part of read -> drawn
+    recorder.OnInputSample(1, kBase + 5 * kMs, false);
+    recorder.AddDrawThreadSleep(1, 6 * kMs);
+    recorder.AddDrawThreadSleep(1, 3 * kMs);
+    recorder.OnSeal(1, kBase + 16 * kMs);
+    recorder.AddDrawThreadSleep(1, 9 * kMs);   // after the seal: belongs to no frame
+    recorder.OnPresent(1, kBase + 17 * kMs, true, true);
+    Check(Near(recorder.Summarize().drawThreadSleep.avgMs, 9.0), "only sleeps between read and seal count");
+    recorder.NotePadThread(0x80001000);
+    recorder.NoteDrawThread(0x80002000);
+    Check(recorder.PadThread() == 0x80001000 && recorder.DrawThread() == 0x80002000, "threads are kept");
+}
+
 } // namespace
 
 int main() {
+    DrawThreadSleepCountsOnlyAfterTheRead();
     BreakdownShowsWhereTheTickGoes();
     InterpolatedFrameReportsFirstAndNativeLatency();
     FrameWithoutSlotsHasEqualFirstAndNative();

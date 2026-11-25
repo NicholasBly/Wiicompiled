@@ -17,6 +17,7 @@
 #include "fiber_manager.h"
 #include "timebase_contract.h"
 #include "runtime_log.h"
+#include "latency_stats.h"
 #include "os_internal.h"
 
 namespace OsHleInternal {
@@ -393,6 +394,25 @@ void ReportUnparkableSleep(uint32_t queuePtr, uint32_t thread)
 extern "C" void OSSleepThread_HLE_801aa9b8(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
+    // The latency overlay's breakdown: how long the drawing thread is blocked during a tick.
+    struct DrawThreadSleepTimer {
+        bool drawThread = false;
+        uint64_t tag = 0;
+        uint64_t start = 0;
+        DrawThreadSleepTimer() {
+            const uint32_t thread = VI_HLE_CurrentGuestThread();
+            drawThread = thread != 0 && thread == LatencyStats::Global().DrawThread();
+            if (drawThread) {
+                tag = VI_HLE_CurrentFrameTag();
+                start = LatencyStats::NowNanos();
+            }
+        }
+        ~DrawThreadSleepTimer() {
+            if (drawThread) {
+                LatencyStats::Global().AddDrawThreadSleep(tag, LatencyStats::NowNanos() - start);
+            }
+        }
+    } drawThreadSleepTimer;
     const uint32_t queuePtr = cpu->gpr[3];
     
     if (queuePtr == 0) {

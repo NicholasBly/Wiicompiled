@@ -50,6 +50,7 @@ PPC_NATIVE_OVERRIDE_VOID(8016ed94, GX__FinishInterruptHandler_8016ed94, (), ());
 extern "C" void GX__DrawDone_8016eab0() {
     // The latency overlay's breakdown: the game has submitted this frame's drawing.
     LatencyStats::Global().OnDrawDone(VI_HLE_CurrentFrameTag(), LatencyStats::NowNanos());
+    LatencyStats::Global().NoteDrawThread(VI_HLE_CurrentGuestThread());
     GX_SYNC_INLINE();
     try { Memory::Write8(kGxDrawDoneFlagAddr, 0); } catch (...) {}
     GXDrawDone(); GX__FinishInterruptHandler_8016ed94();

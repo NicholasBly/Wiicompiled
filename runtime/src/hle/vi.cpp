@@ -525,6 +525,10 @@ void PaceToRetraceBoundary(Clock::time_point deadline) {
 // the retrace-context black/boot present path in AdvanceRetrace.
 uint64_t VI_HLE_CurrentFrameTag() { return s_frameTag.load(std::memory_order_acquire); }
 
+uint32_t VI_HLE_CurrentGuestThread() {
+    return Fiber::GuestFiberManager::IsInitialized() ? Fiber::GuestFiberManager::GetCurrentGuestThread() : 0;
+}
+
 void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     if (s_presentSequenceActive.exchange(true, std::memory_order_acq_rel)) {
         return;
