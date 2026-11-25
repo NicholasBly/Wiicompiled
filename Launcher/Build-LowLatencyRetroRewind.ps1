@@ -16,8 +16,8 @@ Run it from PowerShell:
 The first run takes a while (it translates the game and compiles aurora from source).
 #>
 param(
-    # Where the WiiCompiled installer put the game.
-    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Programs\WiiCompiled'),
+    # Where the game is installed. Found automatically for the WiiCompiled installer and Wheel Wizard.
+    [string]$InstallDir,
     # Your RetroRewind6 folder (the one with Binaries\Code.pul). Read from Config.toml if omitted.
     [string]$RetroRewindDir,
     [string]$Owner = 'NicholasBly',
@@ -62,7 +62,16 @@ function Get-Source([string]$Repo, [string]$Name, [string]$Downloads) {
 }
 
 # --- 1. Check the existing installation -------------------------------------------------------
-Step "Checking the WiiCompiled installation in $InstallDir"
+if ([string]::IsNullOrWhiteSpace($InstallDir)) {
+    $candidates = @(
+        (Join-Path $env:APPDATA 'CT-MKWII\Recomp\Install'),        # Wheel Wizard
+        (Join-Path $env:LOCALAPPDATA 'Programs\WiiCompiled')        # WiiCompiled installer
+    )
+    $InstallDir = $candidates | Where-Object { Test-Path -LiteralPath (Join-Path $_ 'Toolkit\Translator\Translator.Cli.exe') } |
+        Select-Object -First 1
+    if (-not $InstallDir) { Fail "No installation found in: $($candidates -join ', '). Pass -InstallDir." }
+}
+Step "Checking the installation in $InstallDir"
 $toolkit = Join-Path $InstallDir 'Toolkit'
 $installedWorkspace = Join-Path $InstallDir 'BuildWorkspace'
 $installedRetro = Join-Path $InstallDir 'RetroRewind'
@@ -74,14 +83,24 @@ foreach ($required in @(
     (Join-Path $installedRetro 'RetroRewind.exe')
 )) {
     if (-not (Test-Path -LiteralPath $required)) {
-        Fail "Missing $required. Install WiiCompiled with Retro Rewind using the normal installer first, or pass -InstallDir."
+        Fail "Missing $required. Make sure Retro Rewind is installed and built, or pass -InstallDir."
     }
 }
+
+# The game keeps its settings in <folder with portable.txt>\UserData when it finds that marker up
+# to 4 folders above the .exe (Wheel Wizard installs do this), otherwise in %LOCALAPPDATA%\WiiCompiled.
+$dataDir = Join-Path $env:LOCALAPPDATA 'WiiCompiled'
+$probe = $installedRetro
+for ($level = 0; $level -le 4 -and $probe; $level++) {
+    if (Test-Path -LiteralPath (Join-Path $probe 'portable.txt')) { $dataDir = Join-Path $probe 'UserData'; break }
+    $probe = Split-Path -Parent $probe
+}
+Write-Host "Game settings folder: $dataDir"
 
 # --- 2. Find the Retro Rewind package ---------------------------------------------------------
 Step 'Finding your Retro Rewind files'
 if ([string]::IsNullOrWhiteSpace($RetroRewindDir)) {
-    $config = Join-Path $env:LOCALAPPDATA 'WiiCompiled\Config.toml'
+    $config = Join-Path $dataDir 'Config.toml'
     if (Test-Path -LiteralPath $config) {
         $match = Select-String -LiteralPath $config -Pattern '^\s*retro_rewind_root\s*=\s*["''](.+?)["'']' | Select-Object -First 1
         if ($match) { $RetroRewindDir = $match.Matches[0].Groups[1].Value -replace '\\\\', '\' }
@@ -181,7 +200,7 @@ $exe = Join-Path $product 'RetroRewind.exe'
 
 Write-Host "`nDone. Test build: $exe" -ForegroundColor Green
 Write-Host 'In game: F10 -> Graphics -> Latency overlay, Smooth frames, Frame rate cap, NVIDIA Reflex.'
-Write-Host "Latency CSVs: $(Join-Path $env:LOCALAPPDATA 'WiiCompiled\LatencyLogs')"
+Write-Host "Latency CSVs: $(Join-Path $dataDir 'LatencyLogs')"
 Write-Host 'Settings live in the same Config.toml as your normal install; the normal build ignores the new ones.'
 
 if ($Launch) {
