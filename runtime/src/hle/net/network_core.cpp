@@ -379,10 +379,10 @@ void CloseNativeSocket(NativeSocket socket) {
 #endif
 }
 
-void SetNonBlocking(NativeSocket socket, bool enabled) {
+bool SetNonBlocking(NativeSocket socket, bool enabled) {
 #ifdef _WIN32
     u_long mode = enabled ? 1 : 0;
-    ioctlsocket(socket, FIONBIO, &mode);
+    return ioctlsocket(socket, FIONBIO, &mode) == 0;
 #else
     int flags = fcntl(socket, F_GETFL, 0);
     if (flags >= 0) {
@@ -391,8 +391,9 @@ void SetNonBlocking(NativeSocket socket, bool enabled) {
         } else {
             flags &= ~O_NONBLOCK;
         }
-        fcntl(socket, F_SETFL, flags);
+        return fcntl(socket, F_SETFL, flags) == 0;
     }
+    return false;
 #endif
 }
 
@@ -446,11 +447,12 @@ int32_t ReconnectWiiSocket(WiiSocket& socket, uint16_t port) {
 
     CloseNativeSocket(socket.native);
     socket.native = native;
+    socket.nativeNonblocking = true;
     socket.generation = NextSocketGeneration();
     socket.peerAddr = addr;
     socket.peerPort = port;
     socket.nonblocking = false;
-    SetNonBlocking(socket.native, false);
+    SetSocketNonBlocking(socket, false);
     return 0;
 }
 
@@ -648,9 +650,10 @@ extern "C" int32_t Network_HLE_OpenDevice(const char* path, uint32_t mode) {
     if (!path) {
         return -101;
     }
-    if (!RuntimeConfigFile::NetworkEnabled(true)) {
-        // The guest opens several /dev/net nodes at boot and retries; report the
-        // reason online will not work exactly once.
+    const bool isIpTop = std::strcmp(path, "/dev/net/ip/top") == 0;
+    const bool isSsl = std::strcmp(path, "/dev/net/ssl") == 0;
+    // KD and NCD provide local identity/configuration services even offline.
+    if ((isIpTop || isSsl) && !RuntimeConfigFile::NetworkEnabled(true)) {
         static bool reported = false;
         if (!reported) {
             reported = true;
@@ -665,10 +668,10 @@ extern "C" int32_t Network_HLE_OpenDevice(const char* path, uint32_t mode) {
         kind = DeviceKind::KdTime;
     } else if (std::strcmp(path, "/dev/net/ncd/manage") == 0) {
         kind = DeviceKind::NcdManage;
-    } else if (std::strcmp(path, "/dev/net/ip/top") == 0) {
+    } else if (isIpTop) {
         kind = DeviceKind::IpTop;
         EnsureSocketRuntime();
-    } else if (std::strcmp(path, "/dev/net/ssl") == 0) {
+    } else if (isSsl) {
         kind = DeviceKind::Ssl;
         EnsureSocketRuntime();
     } else {

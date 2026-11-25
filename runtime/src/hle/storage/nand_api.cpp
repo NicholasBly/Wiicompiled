@@ -4,6 +4,14 @@
 
 #include "nand_internal.h"
 
+#include <atomic>
+#include <cerrno>
+
+#ifdef __linux__
+#include <linux/fs.h>
+#include <sys/syscall.h>
+#endif
+
 // ============================================================================
 // Local helpers
 // ============================================================================
@@ -44,15 +52,41 @@ static FileHandle* ResolveNandFileHandle(const char* who, uint32_t fileInfoPtr) 
 // The synchronous RVL NAND* library
 // ============================================================================
 
+static bool RenameNoReplace(const std::filesystem::path& from,
+                            const std::filesystem::path& to,
+                            std::error_code& error) {
+#ifdef _WIN32
+    if (MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_WRITE_THROUGH)) {
+        error.clear();
+        return true;
+    }
+    error = std::error_code(static_cast<int>(GetLastError()), std::system_category());
+    return false;
+#elif defined(__linux__)
+    const int result = syscall(SYS_renameat2, AT_FDCWD, from.c_str(), AT_FDCWD, to.c_str(), RENAME_NOREPLACE);
+    if (result == 0) {
+        error.clear();
+        return true;
+    }
+    error = std::error_code(errno, std::generic_category());
+    return false;
+#else
+    (void)from;
+    (void)to;
+    error = std::make_error_code(std::errc::operation_not_supported);
+    return false;
+#endif
+}
+
 extern "C" int32_t NANDInit_HLE(void) {
     // Initialize ISFS
     ISFS_OpenLib_Initialize(&GetPersistentCpuContext());
 
     // NANDHomeDir is at 0x80346D20 (from ESP_GetDataDir output)
-    WriteGuestNandPath(0x80346D20, CurrentNandDataDir());
+    WriteGuestNandPath(MKW_GADDR(80346D20), CurrentNandDataDir());
 
     // Mark NAND as initialized (0x80386848 = 2)
-    Memory::Write32(0x80386848, 2);
+    Memory::Write32(MKW_GADDR(80386848), 2);
 
     return NAND_RESULT_OK;
 }
@@ -92,6 +126,10 @@ extern "C" int32_t NANDOpen_HLE(uint32_t pathPtr, uint32_t fileInfoPtr, uint32_t
     }
 
     const std::filesystem::path hostPath = TranslateNandPath(path);
+    if (hostPath.empty()) {
+        LogNandError("NANDOpen", "FAILED to translate path '%s'", path);
+        return NAND_RESULT_INVALID;
+    }
 
     if (const auto result = NandCheckSystemSaveRead("NANDOpen", hostPath, mode))
         return *result;
@@ -214,10 +252,15 @@ extern "C" int32_t NANDRead_HLE(uint32_t fileInfoPtr, uint32_t bufferPtr, uint32
         return NAND_RESULT_INVALID;
     }
 
-    uint8_t* buffer = (uint8_t*)Memory::GetPointer(bufferPtr);
-    if (!buffer) {
+    if (length == 0) {
+        return 0;
+    }
+    // The host pointer is only valid for the range it was resolved with.
+    if (!Memory::Contains(bufferPtr, length)) {
+        LogNandError("NANDRead", "invalid buffer 0x%08X length=%u", bufferPtr, length);
         return NAND_RESULT_INVALID;
     }
+    uint8_t* buffer = Memory::GetPointer(bufferPtr, length);
 
     size_t bytesRead = std::fread(buffer, 1, length, handle->file);
     return static_cast<int32_t>(bytesRead);
@@ -234,10 +277,14 @@ extern "C" int32_t NANDWrite_HLE(uint32_t fileInfoPtr, uint32_t bufferPtr, uint3
         return NAND_RESULT_INVALID;
     }
 
-    const uint8_t* buffer = (const uint8_t*)Memory::GetPointer(bufferPtr);
-    if (!buffer) {
+    if (length == 0) {
+        return 0;
+    }
+    if (!Memory::Contains(bufferPtr, length)) {
+        LogNandError("NANDWrite", "invalid buffer 0x%08X length=%u", bufferPtr, length);
         return NAND_RESULT_INVALID;
     }
+    const uint8_t* buffer = Memory::GetPointer(bufferPtr, length);
 
     size_t bytesWritten = std::fwrite(buffer, 1, length, handle->file);
     std::fflush(handle->file);
@@ -331,6 +378,9 @@ extern "C" int32_t NANDCreateDir_HLE(uint32_t pathPtr, uint32_t perm, uint32_t a
     }
 
     const std::filesystem::path hostPath = TranslateNandPath(path);
+    if (hostPath.empty()) {
+        return NAND_RESULT_INVALID;
+    }
 
     if (PathExists(hostPath)) {
         if (IsDirectory(hostPath)) {
@@ -348,6 +398,11 @@ extern "C" int32_t NANDCreateDir_HLE(uint32_t pathPtr, uint32_t perm, uint32_t a
 PPC_NATIVE_OVERRIDE(8019BBE0, NANDCreateDir_HLE, int32_t, (uint32_t pathPtr, uint32_t perm, uint32_t attr), (pathPtr, perm, attr));
 
 extern "C" int32_t NANDMove_HLE(uint32_t srcPathPtr, uint32_t dstPathPtr) {
+    // A cross-mount move is implemented as several host operations. Keep two
+    // guest moves from interleaving those operations and corrupting recovery.
+    static std::mutex moveMutex;
+    std::lock_guard<std::mutex> lock(moveMutex);
+
     const char* srcPath = srcPathPtr ? (const char*)Memory::GetPointer(srcPathPtr) : nullptr;
     const char* dstPath = dstPathPtr ? (const char*)Memory::GetPointer(dstPathPtr) : nullptr;
     
@@ -381,6 +436,112 @@ extern "C" int32_t NANDMove_HLE(uint32_t srcPathPtr, uint32_t dstPathPtr) {
     std::filesystem::rename(srcHost, dstHost, ec);
     if (!ec) {
         return NAND_RESULT_OK;
+    }
+
+    // Flatpak can expose the managed NAND and an external Riivolution save
+    // directory as separate mounts. Linux cannot rename across mounts, but
+    // nandMove must still work for files such as banner.bin. Preserve the
+    // operation's semantics with a copy followed by source removal.
+    if (ec == std::errc::cross_device_link) {
+        static std::atomic<uint64_t> moveSequence{0};
+#ifdef _WIN32
+        const auto processId = GetCurrentProcessId();
+#else
+        const auto processId = getpid();
+#endif
+        std::filesystem::path scratchHost;
+        std::error_code scratchEc;
+        for (unsigned attempt = 0; attempt < 128; ++attempt) {
+            const auto name = ".nandmove-" + std::to_string(processId) + "-" +
+                              std::to_string(moveSequence.fetch_add(1)) + "-" +
+                              std::to_string(attempt);
+            const auto candidate = dstDirectoryHost / name;
+            scratchEc.clear();
+            if (std::filesystem::create_directory(candidate, scratchEc)) {
+                scratchHost = candidate;
+                break;
+            }
+            if (scratchEc && scratchEc != std::errc::file_exists) {
+                LogNandError("NANDMove", "failed to claim temporary directory '%s': %s",
+                             HostPathText(candidate).c_str(), scratchEc.message().c_str());
+                return NAND_RESULT_UNKNOWN;
+            }
+        }
+        if (scratchHost.empty()) {
+            LogNandError("NANDMove", "could not claim a unique temporary directory");
+            return NAND_RESULT_UNKNOWN;
+        }
+
+        const bool sourceIsDirectory = IsDirectory(srcHost);
+        const std::filesystem::path tempHost = scratchHost / srcName;
+        const auto cleanupScratch = [&]() {
+            std::error_code cleanupEc;
+            std::filesystem::remove_all(scratchHost, cleanupEc);
+            if (cleanupEc) {
+                LogNandError("NANDMove", "failed to clean up temporary directory '%s': %s",
+                             HostPathText(scratchHost).c_str(), cleanupEc.message().c_str());
+            }
+        };
+
+        std::error_code copyEc;
+        if (sourceIsDirectory) {
+            std::filesystem::copy(srcHost, tempHost,
+                                  std::filesystem::copy_options::recursive, copyEc);
+        } else {
+            std::filesystem::copy_file(srcHost, tempHost, copyEc);
+        }
+
+        if (copyEc) {
+            LogNandError("NANDMove", "cross-mount copy failed: %s", copyEc.message().c_str());
+            cleanupScratch();
+            return NAND_RESULT_UNKNOWN;
+        }
+
+        std::error_code publishEc;
+        if (sourceIsDirectory) {
+            RenameNoReplace(tempHost, dstHost, publishEc);
+        } else {
+            // link(2) and CreateHardLink do not replace an existing destination,
+            // unlike rename(2) on POSIX. Both paths are already on the target
+            // filesystem, so the link is a no-replace publication operation.
+            std::filesystem::create_hard_link(tempHost, dstHost, publishEc);
+        }
+        if (publishEc) {
+            LogNandError("NANDMove", "failed to publish cross-mount copy: %s",
+                         publishEc.message().c_str());
+            cleanupScratch();
+            return NAND_RESULT_UNKNOWN;
+        }
+        cleanupScratch();
+
+        std::error_code removeEc;
+        std::filesystem::remove_all(srcHost, removeEc);
+        if (!removeEc) {
+            LogNandWarning("NANDMove", "used copy/remove fallback across mounts");
+            return NAND_RESULT_OK;
+        }
+
+        // Keep the source as the authoritative copy when cleanup fails. The
+        // destination was published atomically on its own mount; regular files
+        // are rolled back below, while directories keep the complete copy when
+        // their source removal was only partial. Cross-mount moves cannot
+        // provide crash-atomicity, so this is best effort.
+        LogNandError("NANDMove", "copy succeeded but source removal failed: %s",
+                     removeEc.message().c_str());
+        if (sourceIsDirectory) {
+            // remove_all may have removed only part of a directory tree. Keep
+            // the complete published copy rather than rolling it back to a
+            // partially deleted source.
+            LogNandWarning("NANDMove", "preserving published directory copy after partial source removal");
+        } else {
+            std::error_code rollbackEc;
+            std::filesystem::remove_all(dstHost, rollbackEc);
+            if (rollbackEc) {
+                LogNandError("NANDMove", "failed to roll back destination '%s': %s",
+                             HostPathText(dstHost).c_str(), rollbackEc.message().c_str());
+            }
+        }
+        return NAND_RESULT_UNKNOWN;
     }
 
     LogNandError("NANDMove", "FAILED error=%d message='%s'", ec.value(), ec.message().c_str());
