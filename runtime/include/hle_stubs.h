@@ -4,6 +4,7 @@
 
 // hle/gx/gx_fatal_stubs.cpp includes nothing but this header and reaches
 // std::fprintf / std::snprintf / std::abort through it.
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 
@@ -21,6 +22,8 @@ void VI_HLE_SetLateTickStart(bool enabled);
 // GXDrawDone reports the drawing thread; OSSleepThread reports every guest wait.
 void VI_HLE_NoteDrawThread();
 void VI_HLE_NoteGuestWait();
+// Tag of the frame the game is producing now; advances when VI_HLE_PresentFrame seals one.
+uint64_t VI_HLE_CurrentFrameTag();
 bool VI_HLE_IsAdvancingRetrace();
 void VI_HLE_SetXfbReady(uint32_t xfbAddr); // Called by GXCopyDisp to signal EFB→XFB copy
 void Audio_HLE_Tick(CpuContext* ctx, uint32_t deltaMicros);

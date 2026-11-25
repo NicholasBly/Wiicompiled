@@ -11,6 +11,7 @@
 #include "perf_stats.h"
 #include "late_tick_start.h"
 #include "frame_pacing_setting.h"
+#include "nvidia_reflex.h"
 
 #include <dolphin/vi.h>
 
@@ -489,6 +490,9 @@ uint32_t s_lastPacedRetraceCount = ~0u;
 // comment at the stamping site). Producer-thread only, like the memo above.
 uint64_t s_lastPresentAnchorNanos = 0;
 
+// Numbers the frames for Reflex's markers. Starts at 1: Reflex treats 0 as no frame.
+std::atomic<uint64_t> s_frameTag{1};
+
 // Sleeps to the same VI retrace boundary VIWaitForRetrace targets, servicing alarms every 1 ms so audio
 // DMA and timers keep running, then delivers that retrace so guest logic starts exactly on the grid.
 // Holds the producer until `deadline` while keeping alarms and audio serviced.
@@ -584,6 +588,8 @@ void VI_HLE_NoteGuestWait() {
     s_lateTickWork.OnWaitStart(SteadyNanos());
 }
 
+uint64_t VI_HLE_CurrentFrameTag() { return s_frameTag.load(std::memory_order_acquire); }
+
 void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     if (s_presentSequenceActive.exchange(true, std::memory_order_acq_rel)) {
         return;
@@ -591,6 +597,11 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     struct SequenceGuard {
         ~SequenceGuard() { s_presentSequenceActive.store(false, std::memory_order_release); }
     } sequenceGuard;
+    // The frame produced since the last seal goes out under this tag; Aurora reports its render and
+    // present timing with it, so Reflex's markers for one frame line up.
+    const uint64_t sealedTag = s_frameTag.load(std::memory_order_relaxed);
+    Reflex::OnSimulationEnd(sealedTag);
+    aurora_set_frame_tag(sealedTag);
     Clock::time_point paceDeadline{};
     bool paceThisFrame = false;
     uint32_t retracesElapsed = 0;
@@ -655,6 +666,10 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     }
     settings_overlay::AdvancePresentedFrame();
     PerfStats::OnFramePresented();
+    // The next tick starts here. With Reflex on, its sleep can push the start (and the tick's
+    // controller read) a little later.
+    s_frameTag.store(sealedTag + 1, std::memory_order_release);
+    Reflex::OnTickStart(sealedTag + 1);
     g_auroraFrameActive.store(false, std::memory_order_release);
     g_auroraFrameHadWork.store(false, std::memory_order_release);
     if (presentedXfb) {

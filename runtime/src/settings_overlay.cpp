@@ -9,6 +9,7 @@
 #include "game_graphics_options.h"
 #include "hle_stubs.h"
 #include "music_attenuation.h"
+#include "nvidia_reflex.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
 #include "wiimote_host.h"
@@ -107,6 +108,7 @@ bool g_vsync = RuntimeConfigFile::Vsync();
 bool g_disableCopyFilter = RuntimeConfigFile::DisableCopyFilter(true);
 bool g_showFps = RuntimeConfigFile::ShowFps(true);
 bool g_lateTickStart = RuntimeConfigFile::LateTickStart(false);
+int g_reflexMode = static_cast<int>(RuntimeConfigFile::ReflexMode(0));
 bool g_forceAspect = RuntimeConfigFile::ForceAspectEnabled();
 bool g_widescreen = RuntimeConfigFile::WidescreenEnabled(true);
 #if defined(__APPLE__)
@@ -1316,8 +1318,31 @@ void DrawGraphicsSettings() {
     ImGui::TextDisabled("Starts each game tick just before the game needs your input, so it shows up about "
                         "12 ms sooner. Turn it off if you see stutter.");
     ImGui::PopTextWrapPos();
+    {
+        const char* reflexUnavailable = Reflex::UnsupportedReason();
+        constexpr std::array<const char*, 3> kReflexModes{"Off", "On", "On + Boost"};
+        ImGui::BeginDisabled(reflexUnavailable != nullptr);
+        if (ImGui::Combo("NVIDIA Reflex", &g_reflexMode, kReflexModes.data(), static_cast<int>(kReflexModes.size()))) {
+            Reflex::SetMode(static_cast<Reflex::Mode>(g_reflexMode));
+            RuntimeConfigFile::SetReflexMode(static_cast<uint32_t>(g_reflexMode));
+        }
+        ImGui::EndDisabled();
+        if (reflexUnavailable != nullptr) {
+            ImGui::TextDisabled("%s", reflexUnavailable);
+        } else if (static_cast<int>(Reflex::CurrentMode()) != g_reflexMode) {
+            ImGui::TextDisabled("The driver did not accept this Reflex mode.");
+        }
+    }
     ImGui::Separator();
     ImGui::Text("Graphics API: %s", GraphicsApiDisplayName());
+}
+
+// Render-worker timing from Aurora. Reflex sees one render-submit and one present pair per game
+// frame: the real frame's, not the inserted ones.
+void OnAuroraFrameTiming(const AuroraFrameTimingEvent* event, void*) {
+    if (event->slot < 0) {
+        Reflex::OnFrameTiming(event->frameTag, static_cast<uint32_t>(event->type));
+    }
 }
 
 void DrawFpsOverlay() {
@@ -1669,6 +1694,8 @@ void InitializeRuntimeSettings() noexcept {
     aurora_set_disable_copy_filter(g_disableCopyFilter);
     aurora_set_skip_unready_pipelines(g_skipUnreadyPipelines);
     VI_HLE_SetLateTickStart(g_lateTickStart);
+    aurora_set_frame_timing_callback(OnAuroraFrameTiming, nullptr);
+    Reflex::SetMode(static_cast<Reflex::Mode>(g_reflexMode));
     g_strapInputAccepted.store(false, std::memory_order_relaxed);
     g_startupDismissFrame.store(UINT64_MAX, std::memory_order_relaxed);
     g_bootShadersReady.store(false, std::memory_order_relaxed);

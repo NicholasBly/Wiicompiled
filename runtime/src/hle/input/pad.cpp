@@ -2,6 +2,7 @@
 #include "memory.h"
 #include "hle/controller_status_contract.h"
 #include "input_bindings.h"
+#include "nvidia_reflex.h"
 #include "motion_trick.h"
 
 #include <algorithm>
@@ -120,6 +121,7 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
     FillTriggersHeldByButtons(statuses);
     InputBindings::Apply(statuses);
     MotionTrick::Apply(statuses);
+    Reflex::OnInputSample(VI_HLE_CurrentFrameTag());
 
     try {
         for (uint32_t i = 0; i < PAD_CHANMAX; ++i) {

@@ -141,7 +141,8 @@ if(MKW_PLATFORM_WINDOWS)
 endif()
 
 if(TARGET SDL3::SDL3)
-    add_executable(mkw_pad_trigger_tests "${MKW_TEST_RUNTIME_DIR}/tests/pad_trigger_tests.cpp")
+    add_executable(mkw_pad_trigger_tests "${MKW_TEST_RUNTIME_DIR}/tests/pad_trigger_tests.cpp"
+        "${MKW_TEST_RUNTIME_DIR}/src/nvidia_reflex.cpp")
     target_include_directories(mkw_pad_trigger_tests PRIVATE
         "${MKW_TEST_RUNTIME_DIR}/tests/pad_trigger_support"
         "${MKW_TEST_RUNTIME_DIR}/include" "${MKW_AURORA_DIR}/include")
@@ -307,6 +308,13 @@ add_executable(mkw_frame_pacing_setting_tests "${MKW_TEST_RUNTIME_DIR}/tests/fra
 target_include_directories(mkw_frame_pacing_setting_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/include")
 target_compile_features(mkw_frame_pacing_setting_tests PRIVATE cxx_std_20)
 add_test(NAME mkw_frame_pacing_setting_tests COMMAND mkw_frame_pacing_setting_tests)
+
+add_executable(mkw_nvidia_reflex_tests
+    "${MKW_TEST_RUNTIME_DIR}/tests/nvidia_reflex_tests.cpp"
+    "${MKW_TEST_RUNTIME_DIR}/src/nvidia_reflex.cpp")
+target_include_directories(mkw_nvidia_reflex_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/include")
+target_compile_features(mkw_nvidia_reflex_tests PRIVATE cxx_std_20)
+add_test(NAME mkw_nvidia_reflex_tests COMMAND mkw_nvidia_reflex_tests)
 
 # The emulated Bluetooth controller is pure host code.
 add_executable(mkw_bluetooth_controller_tests

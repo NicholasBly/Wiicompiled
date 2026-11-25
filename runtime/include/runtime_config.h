@@ -59,6 +59,7 @@ struct RuntimeUserConfig {
     std::optional<bool> textureDumps;
     std::optional<bool> showFps;
     std::optional<bool> lateTickStart;
+    std::optional<uint32_t> reflexMode;
     std::optional<uint32_t> disabledPostProcessingPaths;
     std::optional<float> audioVolume;
     std::optional<float> audioMusicVolume;
@@ -487,6 +488,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.disableCopyFilter = FindConfigValue<bool>(document, "video", "disable_copy_filter");
     config.showFps = FindConfigValue<bool>(document, "video", "show_fps");
     config.lateTickStart = FindConfigValue<bool>(document, "video", "late_tick_start");
+    config.reflexMode = FindConfigUint(document, "video", "reflex_mode");
     config.textureReplacements = FindConfigValue<bool>(document, "video", "texture_replacements");
     config.textureDumps = FindConfigValue<bool>(document, "video", "texture_dumps");
     if (auto value = FindConfigUint(document, "video", "disabled_post_processing_paths");
@@ -725,6 +727,15 @@ inline bool SetShowFps(bool value) {
 inline bool SetLateTickStart(bool value) {
     Mutable().lateTickStart = value;
     return WriteSetting("video", "late_tick_start", value ? "true" : "false");
+}
+
+// NVIDIA Reflex: 0 off, 1 on, 2 on + boost.
+inline bool SetReflexMode(uint32_t value) {
+    if (value > 2) {
+        return false;
+    }
+    Mutable().reflexMode = value;
+    return WriteSetting("video", "reflex_mode", std::to_string(value));
 }
 
 inline bool SetDisabledPostProcessingPaths(uint32_t value) {
@@ -1062,6 +1073,11 @@ inline bool ShowFps(bool fallback = true) {
 // Start each game tick shortly before the retrace it waits for, so the controller is read later.
 inline bool LateTickStart(bool fallback = false) {
     return Get().lateTickStart.value_or(fallback);
+}
+
+inline uint32_t ReflexMode(uint32_t fallback = 0) {
+    const uint32_t value = Get().reflexMode.value_or(fallback);
+    return value <= 2 ? value : 0;
 }
 
 inline bool TextureReplacements(bool fallback = false) {
