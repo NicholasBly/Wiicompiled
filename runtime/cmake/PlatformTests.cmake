@@ -141,7 +141,8 @@ if(MKW_PLATFORM_WINDOWS)
 endif()
 
 if(TARGET SDL3::SDL3)
-    add_executable(mkw_pad_trigger_tests "${MKW_TEST_RUNTIME_DIR}/tests/pad_trigger_tests.cpp")
+    add_executable(mkw_pad_trigger_tests "${MKW_TEST_RUNTIME_DIR}/tests/pad_trigger_tests.cpp"
+        "${MKW_TEST_RUNTIME_DIR}/src/latency_stats.cpp" "${MKW_TEST_RUNTIME_DIR}/src/nvidia_reflex.cpp")
     target_include_directories(mkw_pad_trigger_tests PRIVATE
         "${MKW_TEST_RUNTIME_DIR}/tests/pad_trigger_support"
         "${MKW_TEST_RUNTIME_DIR}/include" "${MKW_AURORA_DIR}/include")
