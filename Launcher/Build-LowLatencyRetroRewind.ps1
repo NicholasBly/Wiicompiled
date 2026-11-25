@@ -13,6 +13,9 @@ builds with the project's own LocalBuild.ps1, and writes the result to
 Run it from PowerShell:
     powershell -ExecutionPolicy Bypass -File .\Build-LowLatencyRetroRewind.ps1 -Launch
 
+To build the PR branches instead (everything except the latency overlay):
+    powershell -ExecutionPolicy Bypass -File .\Build-LowLatencyRetroRewind.ps1 -Branch reflex -AuroraBranch frame-pacing -Launch
+
 The first run takes a while (it translates the game and compiles aurora from source).
 #>
 param(
@@ -22,6 +25,9 @@ param(
     [string]$RetroRewindDir,
     [string]$Owner = 'NicholasBly',
     [string]$Branch = 'low-latency-pacing',
+    # The aurora-wiicompiled branch. Defaults to the same name as -Branch. For the PR branches
+    # (late-tick-start, pacing-settings, reflex) use: -AuroraBranch frame-pacing
+    [string]$AuroraBranch,
     # v3 needs AVX2 (any desktop CPU from about 2015 on). Use v2 for older CPUs.
     [ValidateSet('v2', 'v3')] [string]$CpuProfile = 'v3',
     # Re-download the source even if it was downloaded before.
@@ -45,11 +51,12 @@ function Copy-Tree([string]$From, [string]$To, [string[]]$ExcludeDirs = @()) {
     if ($LASTEXITCODE -ge 8) { Fail "Copying $From to $To failed (robocopy exit $LASTEXITCODE)." }
 }
 
-function Get-Source([string]$Repo, [string]$Name, [string]$Downloads) {
-    $zip = Join-Path $Downloads "$Name.zip"
-    $folder = Join-Path $Downloads $Name
+function Get-Source([string]$Repo, [string]$Name, [string]$BranchName, [string]$Downloads) {
+    # Each branch gets its own download, so switching branches never reuses the wrong source.
+    $zip = Join-Path $Downloads "$Name-$BranchName.zip"
+    $folder = Join-Path $Downloads "$Name-$BranchName"
     if ($Refresh -or -not (Test-Path -LiteralPath $folder)) {
-        $url = "https://github.com/$Owner/$Repo/archive/refs/heads/$Branch.zip"
+        $url = "https://github.com/$Owner/$Repo/archive/refs/heads/$BranchName.zip"
         Write-Host "Downloading $url"
         Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
         if (Test-Path -LiteralPath $folder) { Remove-Item -LiteralPath $folder -Recurse -Force }
@@ -126,9 +133,10 @@ Write-Host "Using $RetroRewindDir"
 $work = Join-Path $InstallDir 'LowLatencyTest'
 $downloads = Join-Path $work 'Downloads'
 [IO.Directory]::CreateDirectory($downloads) | Out-Null
-Step "Downloading $Owner/Wiicompiled and $Owner/aurora-wiicompiled ($Branch)"
-$wiiSource = Get-Source 'Wiicompiled' 'wiicompiled' $downloads
-$auroraSource = Get-Source 'aurora-wiicompiled' 'aurora' $downloads
+if ([string]::IsNullOrWhiteSpace($AuroraBranch)) { $AuroraBranch = $Branch }
+Step "Downloading $Owner/Wiicompiled ($Branch) and $Owner/aurora-wiicompiled ($AuroraBranch)"
+$wiiSource = Get-Source 'Wiicompiled' 'wiicompiled' $Branch $downloads
+$auroraSource = Get-Source 'aurora-wiicompiled' 'aurora' $AuroraBranch $downloads
 
 # --- 4. Make a separate build workspace -------------------------------------------------------
 # A copy of the installed workspace (game files, offline dependencies, projects) with the
