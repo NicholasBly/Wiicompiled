@@ -94,16 +94,7 @@ bool g_audioMuted = RuntimeConfigFile::AudioMuted(false);
 int32_t g_muteHotkey = RuntimeConfigFile::MuteHotkey(SDL_SCANCODE_BACKSLASH);
 bool g_audioMixWorker = RuntimeConfigFile::AudioMixWorkerEnabled(true);
 bool g_attenuateMusicWhenMediaPlays = RuntimeConfigFile::AttenuateMusicWhenMediaPlays(false);
-int g_frameInterpolationMode = [] {
-    switch (RuntimeConfigFile::FrameInterpolationFps(0)) {
-    case 120:
-        return 1;
-    case 180:
-        return 2;
-    default:
-        return 0;
-    }
-}();
+FramePacingSetting::Setting g_framePacing = RuntimeConfigFile::FramePacing();
 int g_displayMode = [] {
     const std::string mode = RuntimeConfigFile::DisplayMode("windowed");
     if (mode == "borderless") {
@@ -198,14 +189,16 @@ constexpr std::array<ResolutionItem, 8> kResolutions = {{
     {"3x", 3.0f}, {"4x", 4.0f}, {"6x", 6.0f}, {"8x", 8.0f},
 }};
 
-constexpr std::array<uint32_t, 3> kFrameInterpolationTargetFps{0, 120, 180};
-
 bool IsHighResolutionScale(float scale) {
     return std::fabs(scale - 6.0f) < 0.001f || std::fabs(scale - 8.0f) < 0.001f;
 }
 
 bool IsHighFrameRateMode() {
-    return kFrameInterpolationTargetFps[static_cast<size_t>(g_frameInterpolationMode)] > 60;
+    return g_framePacing.mode != FramePacingSetting::kOff;
+}
+
+void ApplyFramePacing() {
+    aurora_set_frame_pacing(g_framePacing.mode, g_framePacing.cap);
 }
 
 void SetResolutionScale(float scale) {
@@ -1221,20 +1214,18 @@ void DrawGraphicsSettings() {
     if (g_displayMode == AURORA_DISPLAY_MODE_EXCLUSIVE) {
         ImGui::TextDisabled(
             "Requests the closest native-resolution display mode to the output frame "
-            "rate (60 Hz, or the frame interpolation target).");
+            "rate (60 Hz, or the frame rate cap).");
     }
-    constexpr std::array<const char*, 3> kFrameInterpolationModes{
-        "Off", "120 FPS", "180 FPS",
+    constexpr std::array<const char*, 3> kPacingModes{
+        "Off", "Smooth (interpolate)", "Responsive (predict)",
     };
-    const char* currentFrameInterpolationMode =
-        kFrameInterpolationModes[static_cast<size_t>(g_frameInterpolationMode)];
-    bool frameInterpolationModeChanged = false;
-    if (ImGui::BeginCombo("Race frame interpolation (experimental)", currentFrameInterpolationMode)) {
-        for (int mode = 0; mode < static_cast<int>(kFrameInterpolationModes.size()); ++mode) {
-            const bool selected = g_frameInterpolationMode == mode;
-            if (ImGui::Selectable(kFrameInterpolationModes[static_cast<size_t>(mode)], selected)) {
-                g_frameInterpolationMode = mode;
-                frameInterpolationModeChanged = true;
+    bool framePacingChanged = false;
+    if (ImGui::BeginCombo("Smooth frames (experimental)", kPacingModes[g_framePacing.mode])) {
+        for (uint32_t mode = 0; mode < kPacingModes.size(); ++mode) {
+            const bool selected = g_framePacing.mode == mode;
+            if (ImGui::Selectable(kPacingModes[mode], selected)) {
+                g_framePacing.mode = mode;
+                framePacingChanged = true;
             }
             if (selected) {
                 ImGui::SetItemDefaultFocus();
@@ -1242,19 +1233,44 @@ void DrawGraphicsSettings() {
         }
         ImGui::EndCombo();
     }
-    if (frameInterpolationModeChanged) {
+    const auto capLabel = [](uint32_t cap) {
+        return cap == 0 ? std::string("Match display") : std::to_string(cap) + " FPS";
+    };
+    ImGui::BeginDisabled(g_framePacing.mode == FramePacingSetting::kOff);
+    if (ImGui::BeginCombo("Frame rate cap", capLabel(g_framePacing.cap).c_str())) {
+        for (const uint32_t cap : FramePacingSetting::kCaps) {
+            const bool selected = g_framePacing.cap == cap;
+            if (ImGui::Selectable(capLabel(cap).c_str(), selected)) {
+                g_framePacing.cap = cap;
+                framePacingChanged = true;
+            }
+            if (selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    if (framePacingChanged) {
         GX_SYNC_INLINE();
-        const uint32_t targetFps = kFrameInterpolationTargetFps[static_cast<size_t>(g_frameInterpolationMode)];
-        aurora_set_frame_interpolation_fps(targetFps);
-        RuntimeConfigFile::SetFrameInterpolationFps(targetFps);
+        ApplyFramePacing();
+        RuntimeConfigFile::SetFramePacing(g_framePacing);
         LimitResolutionForFrameRate();
         if (aurora_get_display_mode() == AURORA_DISPLAY_MODE_EXCLUSIVE) {
-            // Re-apply exclusive mode so the display refresh tracks the new target.
+            // Re-apply exclusive mode so the display refresh tracks the new cap.
             aurora_set_display_mode(AURORA_DISPLAY_MODE_EXCLUSIVE);
         }
     }
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 380.0f);
-    ImGui::TextDisabled("Frame interpolation is experimental, you might find visual artifacts");
+    if (g_framePacing.mode == FramePacingSetting::kSmooth) {
+        ImGui::TextDisabled("Blends between game frames. Shows each new game frame a little later "
+                            "(up to one frame at the cap rate).");
+    } else if (g_framePacing.mode == FramePacingSetting::kResponsive) {
+        ImGui::TextDisabled("Shows each game frame the moment it is ready, then predicts ahead. "
+                            "Lowest lag; things can overshoot briefly when they stop suddenly.");
+    }
+    ImGui::TextDisabled("The game itself still runs at 60. Experimental: you might see visual artifacts. "
+                        "144/165 look best with G-Sync/FreeSync.");
     ImGui::PopTextWrapPos();
 #if defined(__APPLE__)
     const bool metalFxSupported = aurora_is_metalfx_spatial_supported();
@@ -1456,11 +1472,12 @@ void DrawLatencyOverlay() {
 void DrawFpsOverlay() {
     AuroraPresentTiming presentTiming{};
     aurora_get_present_timing(&presentTiming);
-    const uint32_t targetFps = kFrameInterpolationTargetFps[static_cast<size_t>(g_frameInterpolationMode)];
+    const bool pacingOn = g_framePacing.mode != FramePacingSetting::kOff;
+    const uint32_t targetFps = g_framePacing.cap;
     const double refreshRate = aurora_get_display_refresh_rate();
-    const bool interpolationInactive = targetFps > 60 && !aurora_display_shows_interpolation();
+    const bool interpolationInactive = pacingOn && !aurora_display_shows_interpolation();
     const bool unevenPacing =
-        !g_vsync && !interpolationInactive && refreshRate > 0.0 && targetFps > refreshRate + 1.0;
+        pacingOn && !g_vsync && !interpolationInactive && refreshRate > 0.0 && targetFps > refreshRate + 1.0;
     if (!g_showFps && !unevenPacing && !interpolationInactive) {
         return;
     }
@@ -1495,12 +1512,11 @@ void DrawFpsOverlay() {
         }
         if (interpolationInactive) {
             ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f),
-                               "%u FPS interpolation has no effect on a %.0f Hz display.", targetFps,
-                               refreshRate);
+                               "Smooth frames have no effect on a %.0f Hz display.", refreshRate);
         }
         if (unevenPacing) {
             ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f),
-                               "%u FPS interpolation on a %.0f Hz display without VSync is not smooth.\n"
+                               "A %u FPS cap on a %.0f Hz display without VSync is not smooth.\n"
                                "Enable VSync for smooth motion.",
                                targetFps, refreshRate);
         }
@@ -1794,9 +1810,8 @@ void InitializeRuntimeSettings() noexcept {
 #if defined(__APPLE__)
     aurora_set_metalfx_spatial(g_metalFxSpatialUpscaling);
 #endif
-    const uint32_t targetFps = kFrameInterpolationTargetFps[static_cast<size_t>(g_frameInterpolationMode)];
     LimitResolutionForFrameRate();
-    aurora_set_frame_interpolation_fps(targetFps);
+    ApplyFramePacing();
     aurora_set_display_mode(static_cast<AuroraDisplayMode>(g_displayMode));
     g_displayMode = static_cast<int>(aurora_get_display_mode());
     aurora_set_disable_copy_filter(g_disableCopyFilter);

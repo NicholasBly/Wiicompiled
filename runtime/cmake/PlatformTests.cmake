@@ -296,6 +296,11 @@ target_compile_features(mkw_motion_trick_tests PRIVATE cxx_std_17)
 target_compile_options(mkw_motion_trick_tests PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-ffast-math>)
 add_test(NAME mkw_motion_trick_tests COMMAND mkw_motion_trick_tests)
 
+add_executable(mkw_frame_pacing_setting_tests "${MKW_TEST_RUNTIME_DIR}/tests/frame_pacing_setting_tests.cpp")
+target_include_directories(mkw_frame_pacing_setting_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/include")
+target_compile_features(mkw_frame_pacing_setting_tests PRIVATE cxx_std_20)
+add_test(NAME mkw_frame_pacing_setting_tests COMMAND mkw_frame_pacing_setting_tests)
+
 add_executable(mkw_latency_stats_tests
     "${MKW_TEST_RUNTIME_DIR}/tests/latency_stats_tests.cpp"
     "${MKW_TEST_RUNTIME_DIR}/src/latency_stats.cpp")
