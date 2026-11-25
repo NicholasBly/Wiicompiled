@@ -9,6 +9,7 @@
 #include "platform/host_platform.h"
 #include "runtime_log.h"
 #include "perf_stats.h"
+#include "latency_stats.h"
 
 #include <dolphin/vi.h>
 
@@ -487,6 +488,9 @@ uint32_t s_lastPacedRetraceCount = ~0u;
 // comment at the stamping site). Producer-thread only, like the memo above.
 uint64_t s_lastPresentAnchorNanos = 0;
 
+// Starts at 1: tag 0 means "untagged" to the latency recorder.
+std::atomic<uint64_t> s_frameTag{1};
+
 // Sleeps to the same VI retrace boundary VIWaitForRetrace targets, servicing alarms every 1 ms so audio
 // DMA and timers keep running, then delivers that retrace so guest logic starts exactly on the grid.
 void PaceToRetraceBoundary(Clock::time_point deadline) {
@@ -517,6 +521,8 @@ void PaceToRetraceBoundary(Clock::time_point deadline) {
 // Single owner of the Aurora frame presentation sequence: seals the active frame, optionally paces the
 // producer to the VI retrace boundary, and pre-warms the next frame. Paced from GXCopyDisp; unpaced for
 // the retrace-context black/boot present path in AdvanceRetrace.
+uint64_t VI_HLE_CurrentFrameTag() { return s_frameTag.load(std::memory_order_acquire); }
+
 void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     if (s_presentSequenceActive.exchange(true, std::memory_order_acq_rel)) {
         return;
@@ -524,6 +530,11 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     struct SequenceGuard {
         ~SequenceGuard() { s_presentSequenceActive.store(false, std::memory_order_release); }
     } sequenceGuard;
+    // The frame produced since the last seal goes out under this tag; Aurora reports its presents
+    // with it, and the latency overlay joins the two.
+    const uint64_t sealedTag = s_frameTag.load(std::memory_order_relaxed);
+    LatencyStats::Global().OnSeal(sealedTag, LatencyStats::NowNanos());
+    aurora_set_frame_tag(sealedTag);
     Clock::time_point paceDeadline{};
     bool paceThisFrame = false;
     if (paceToRetrace) {
@@ -587,6 +598,9 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     }
     settings_overlay::AdvancePresentedFrame();
     PerfStats::OnFramePresented();
+    // The next tick starts here: retraces were delivered by the pace above.
+    s_frameTag.store(sealedTag + 1, std::memory_order_release);
+    LatencyStats::Global().OnTickStart(sealedTag + 1, LatencyStats::NowNanos());
     g_auroraFrameActive.store(false, std::memory_order_release);
     g_auroraFrameHadWork.store(false, std::memory_order_release);
     if (presentedXfb) {

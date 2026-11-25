@@ -2,6 +2,7 @@
 #include "memory.h"
 #include "hle/controller_status_contract.h"
 #include "input_bindings.h"
+#include "latency_stats.h"
 #include "motion_trick.h"
 
 #include <algorithm>
@@ -120,6 +121,13 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
     FillTriggersHeldByButtons(statuses);
     InputBindings::Apply(statuses);
     MotionTrick::Apply(statuses);
+
+    // The latency overlay counts from the first read of each tick; its flash test follows A.
+    bool flashHeld = false;
+    for (const PADStatus& status : statuses) {
+        flashHeld |= status.err == PAD_ERR_NONE && (status.button & PAD_BUTTON_A) != 0;
+    }
+    LatencyStats::Global().OnInputSample(VI_HLE_CurrentFrameTag(), LatencyStats::NowNanos(), flashHeld);
 
     try {
         for (uint32_t i = 0; i < PAD_CHANMAX; ++i) {

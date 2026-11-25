@@ -54,6 +54,7 @@ struct RuntimeUserConfig {
     std::optional<bool> textureReplacements;
     std::optional<bool> textureDumps;
     std::optional<bool> showFps;
+    std::optional<bool> latencyOverlay;
     std::optional<uint32_t> disabledPostProcessingPaths;
     std::optional<float> audioVolume;
     std::optional<float> audioMusicVolume;
@@ -490,6 +491,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.gxWorker = FindConfigValue<bool>(document, "video", "gx_worker");
     config.disableCopyFilter = FindConfigValue<bool>(document, "video", "disable_copy_filter");
     config.showFps = FindConfigValue<bool>(document, "video", "show_fps");
+    config.latencyOverlay = FindConfigValue<bool>(document, "video", "latency_overlay");
     config.textureReplacements = FindConfigValue<bool>(document, "video", "texture_replacements");
     config.textureDumps = FindConfigValue<bool>(document, "video", "texture_dumps");
     if (auto value = FindConfigUint(document, "video", "disabled_post_processing_paths");
@@ -720,6 +722,11 @@ inline bool SetDisableCopyFilter(bool value) {
 inline bool SetShowFps(bool value) {
     Mutable().showFps = value;
     return WriteSetting("video", "show_fps", value ? "true" : "false");
+}
+
+inline bool SetLatencyOverlay(bool value) {
+    Mutable().latencyOverlay = value;
+    return WriteSetting("video", "latency_overlay", value ? "true" : "false");
 }
 
 inline bool SetDisabledPostProcessingPaths(uint32_t value) {
@@ -1051,6 +1058,11 @@ inline bool DisableCopyFilter(bool fallback = true) {
 
 inline bool ShowFps(bool fallback = true) {
     return Get().showFps.value_or(fallback);
+}
+
+// Frame-time and latency readout, for comparing pacing and Reflex settings.
+inline bool LatencyOverlay(bool fallback = false) {
+    return Get().latencyOverlay.value_or(fallback);
 }
 
 inline bool TextureReplacements(bool fallback = false) {

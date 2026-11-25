@@ -5,6 +5,8 @@
 #include "controller_button_names.h"
 #include "controller_mapping_wizard.h"
 #include "input_bindings.h"
+#include "latency_stats.h"
+#include "hle_stubs.h"
 #include "motion_trick.h"
 #include "game_graphics_options.h"
 #include "music_attenuation.h"
@@ -29,6 +31,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <iostream>
 #include <string>
@@ -114,6 +118,15 @@ bool g_skipUnreadyPipelines = RuntimeConfigFile::SkipUnreadyPipelines(true);
 bool g_vsync = RuntimeConfigFile::Vsync();
 bool g_disableCopyFilter = RuntimeConfigFile::DisableCopyFilter(true);
 bool g_showFps = RuntimeConfigFile::ShowFps(true);
+bool g_latencyOverlay = RuntimeConfigFile::LatencyOverlay(false);
+// Not saved: a white square in the corner is only wanted while measuring.
+bool g_latencyFlashTest = false;
+std::ofstream g_latencyCsv;
+std::filesystem::path g_latencyCsvPath;
+uint64_t g_latencyCsvOrigin = 0;
+uint64_t g_latencyCsvRows = 0;
+void StartLatencyCsv();
+void StopLatencyCsv();
 bool g_forceAspect = RuntimeConfigFile::ForceAspectEnabled();
 bool g_widescreen = RuntimeConfigFile::WidescreenEnabled(true);
 #if defined(__APPLE__)
@@ -1290,8 +1303,154 @@ void DrawGraphicsSettings() {
     if (ImGui::Checkbox("Show FPS", &g_showFps)) {
         RuntimeConfigFile::SetShowFps(g_showFps);
     }
+    if (ImGui::Checkbox("Latency overlay", &g_latencyOverlay)) {
+        RuntimeConfigFile::SetLatencyOverlay(g_latencyOverlay);
+    }
+    if (g_latencyOverlay) {
+        ImGui::SameLine();
+        if (ImGui::Button(g_latencyCsv.is_open() ? "Stop CSV" : "Record CSV")) {
+            if (g_latencyCsv.is_open()) {
+                StopLatencyCsv();
+            } else {
+                StartLatencyCsv();
+            }
+        }
+        ImGui::SameLine();
+        ImGui::Checkbox("Flash test (hold A)", &g_latencyFlashTest);
+        if (!g_latencyCsvPath.empty()) {
+            ImGui::TextDisabled("CSV: %s", g_latencyCsvPath.string().c_str());
+        }
+    }
     ImGui::Separator();
     ImGui::Text("Graphics API: %s", GraphicsApiDisplayName());
+}
+
+// Render-worker timing from Aurora. Present ends are the moments the frame left for the display.
+void OnAuroraFrameTiming(const AuroraFrameTimingEvent* event, void*) {
+    if (event->type == AURORA_FRAME_PRESENT_END) {
+        LatencyStats::Global().OnPresent(event->frameTag, event->timeNanos, event->slot < 0, event->first);
+    }
+}
+
+const char* PacingModeName(uint32_t mode) {
+    switch (mode) {
+    case AURORA_FRAME_PACING_SMOOTH: return "Smooth";
+    case AURORA_FRAME_PACING_RESPONSIVE: return "Responsive";
+    default: return "Off";
+    }
+}
+
+void StopLatencyCsv() {
+    if (!g_latencyCsv.is_open()) {
+        return;
+    }
+    g_latencyCsv.close();
+    LatencyStats::Global().SetCollectRows(false);
+    RT_LOG(RT_TAG_RUNTIME) << "Latency CSV saved: " << g_latencyCsvPath.string() << std::endl;
+}
+
+void StartLatencyCsv() {
+    StopLatencyCsv();
+    std::error_code ec;
+    const std::filesystem::path directory = RuntimeConfigFile::ApplicationDataDirectory() / "LatencyLogs";
+    std::filesystem::create_directories(directory, ec);
+    uint32_t mode = 0;
+    uint32_t cap = 0;
+    aurora_get_frame_pacing(&mode, &cap);
+    const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
+                             std::chrono::system_clock::now().time_since_epoch())
+                             .count();
+    // The name carries the settings so files from different runs compare at a glance.
+    g_latencyCsvPath = directory / ("latency_" + std::to_string(seconds) + "_" + PacingModeName(mode) + "_cap" +
+                                    std::to_string(cap) + (g_vsync ? "_vsync" : "_novsync") + ".csv");
+    g_latencyCsv.open(g_latencyCsvPath, std::ios::out | std::ios::trunc);
+    if (!g_latencyCsv.is_open()) {
+        RT_LOG(RT_TAG_RUNTIME) << "Could not create latency CSV: " << g_latencyCsvPath.string() << std::endl;
+        return;
+    }
+    g_latencyCsv << LatencyStats::CsvHeader() << '\n';
+    g_latencyCsvOrigin = LatencyStats::NowNanos();
+    g_latencyCsvRows = 0;
+    LatencyStats::Global().SetCollectRows(true);
+}
+
+// File writes stay on this thread; the render worker only queues rows.
+void FlushLatencyCsv() {
+    if (!g_latencyCsv.is_open()) {
+        return;
+    }
+    const auto rows = LatencyStats::Global().TakeCompletedRows();
+    for (const auto& row : rows) {
+        g_latencyCsv << LatencyStats::CsvRow(row, g_latencyCsvOrigin) << '\n';
+    }
+    if (!rows.empty()) {
+        // Flushed as it goes: the process can end without running static destructors.
+        g_latencyCsv.flush();
+        g_latencyCsvRows += rows.size();
+    }
+}
+
+void DrawLatencyStat(const char* label, const LatencyStats::Stat& stat) {
+    if (stat.count == 0) {
+        ImGui::Text("%-24s --", label);
+        return;
+    }
+    ImGui::Text("%-24s avg %5.1f   p99 %5.1f   max %5.1f ms", label, stat.avgMs, stat.p99Ms, stat.maxMs);
+}
+
+void DrawLatencyOverlay() {
+    FlushLatencyCsv();
+    if (g_latencyFlashTest && LatencyStats::Global().FlashHeld(VI_HLE_CurrentFrameTag())) {
+        // Drawn into the frame built from the controller read that saw A held, so a camera or a
+        // photodiode on this corner times read -> photon.
+        constexpr float kFlashSize = 160.0f;
+        ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(kFlashSize, kFlashSize),
+                                                      IM_COL32_WHITE);
+    }
+    if (!g_latencyOverlay) {
+        return;
+    }
+
+    const LatencyStats::Summary summary = LatencyStats::Global().Summarize();
+    uint32_t mode = 0;
+    uint32_t cap = 0;
+    aurora_get_frame_pacing(&mode, &cap);
+    const double aimFps = aurora_get_effective_present_fps();
+    const double refreshRate = aurora_get_display_refresh_rate();
+
+    constexpr float kMargin = 10.0f;
+    const float top = g_topBarVisible ? ImGui::GetFrameHeight() + kMargin : kMargin;
+    ImGui::SetNextWindowPos(ImVec2(kMargin, top), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.7f);
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration |
+                                         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoInputs |
+                                         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav |
+                                         ImGuiWindowFlags_NoSavedSettings;
+    if (ImGui::Begin("Latency Overlay", nullptr, kFlags)) {
+        char capText[16];
+        std::snprintf(capText, sizeof(capText), cap == 0 ? "display" : "%u", cap);
+        ImGui::Text("Pacing %s  |  cap %s  |  aiming %.0f fps  |  VSync %s  |  %.0f Hz display",
+                    PacingModeName(mode), capText, aimFps, g_vsync ? "on" : "off", refreshRate);
+        ImGui::Text("Shown: %.1f fps", summary.presentFps);
+        ImGui::Separator();
+        DrawLatencyStat("Read -> first frame", summary.inputToFirst);
+        DrawLatencyStat("Read -> full frame", summary.inputToNative);
+        DrawLatencyStat("Game tick (CPU)", summary.tickCpu);
+        DrawLatencyStat("Frame time", summary.presentInterval);
+        if (!summary.recentIntervalsMs.empty()) {
+            const float expected = summary.presentInterval.avgMs > 0.0 ? static_cast<float>(summary.presentInterval.avgMs) : 16.7f;
+            ImGui::PlotLines("##frametimes", summary.recentIntervalsMs.data(),
+                             static_cast<int>(summary.recentIntervalsMs.size()), 0, "frame time (ms)", 0.0f,
+                             expected * 2.5f, ImVec2(420.0f, 60.0f));
+        }
+        ImGui::TextDisabled("Starts at the game's controller read. The wait for that read adds 0-16.7 ms\n"
+                            "(8.3 avg) on top, plus controller, USB and monitor time.");
+        if (g_latencyCsv.is_open()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Recording CSV: %llu frames",
+                               static_cast<unsigned long long>(g_latencyCsvRows));
+        }
+    }
+    ImGui::End();
 }
 
 void DrawFpsOverlay() {
@@ -1642,6 +1801,7 @@ void InitializeRuntimeSettings() noexcept {
     g_displayMode = static_cast<int>(aurora_get_display_mode());
     aurora_set_disable_copy_filter(g_disableCopyFilter);
     aurora_set_skip_unready_pipelines(g_skipUnreadyPipelines);
+    aurora_set_frame_timing_callback(OnAuroraFrameTiming, nullptr);
     g_strapInputAccepted.store(false, std::memory_order_relaxed);
     g_startupDismissFrame.store(UINT64_MAX, std::memory_order_relaxed);
     g_bootShadersReady.store(false, std::memory_order_relaxed);
@@ -1728,6 +1888,7 @@ void Draw() noexcept {
         DrawShaderCompilationStatus();
     }
     DrawFpsOverlay();
+    DrawLatencyOverlay();
     DrawTopBar();
     DrawExitPrompt();
     DrawRestartPrompt();
