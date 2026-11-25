@@ -903,7 +903,13 @@ PPC_NATIVE_OVERRIDE_VOID(801BAC48, VIGetCurrentLine_HLE_801bac48, (CpuContext* c
 extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
-    
+    // The latency overlay's breakdown: how long the frame being produced sits in retrace waits.
+    struct WaitTimer {
+        uint64_t tag = VI_HLE_CurrentFrameTag();
+        uint64_t start = LatencyStats::NowNanos();
+        ~WaitTimer() { LatencyStats::Global().AddRetraceWait(tag, LatencyStats::NowNanos() - start); }
+    } waitTimer;
+
     if (Fiber::GuestFiberManager::IsInitialized()) {
         const int32_t irqState = OS__DisableInterrupts_801a65ac();
         uint32_t retraceCount = 0;

@@ -1485,6 +1485,9 @@ void DrawLatencyOverlay() {
         DrawLatencyStat("Read -> first frame", summary.inputToFirst);
         DrawLatencyStat("Read -> full frame", summary.inputToNative);
         DrawLatencyStat("Game tick (CPU)", summary.tickCpu);
+        DrawLatencyStat("  read -> drawn", summary.inputToDrawDone);
+        DrawLatencyStat("  drawn -> handed over", summary.drawDoneToSeal);
+        DrawLatencyStat("  waiting for retrace", summary.retraceWait);
         DrawLatencyStat("Frame time", summary.presentInterval);
         if (Reflex::LatencyReport reflex; Reflex::LatestLatency(reflex)) {
             ImGui::Text("Reflex (driver):  read -> GPU done %.1f ms  |  tick -> GPU done %.1f ms  |  GPU busy %.1f ms",

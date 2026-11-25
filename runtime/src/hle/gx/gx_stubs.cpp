@@ -1,5 +1,7 @@
 #include "gx_internal.h"
 #include "runtime_log.h"
+#include "hle_stubs.h"
+#include "latency_stats.h"
 
 extern "C" void __GXSetSUTexRegs();
 
@@ -46,6 +48,8 @@ extern "C" void GX__FinishInterruptHandler_8016ed94() {
 PPC_NATIVE_OVERRIDE_VOID(8016ed94, GX__FinishInterruptHandler_8016ed94, (), ());
 
 extern "C" void GX__DrawDone_8016eab0() {
+    // The latency overlay's breakdown: the game has submitted this frame's drawing.
+    LatencyStats::Global().OnDrawDone(VI_HLE_CurrentFrameTag(), LatencyStats::NowNanos());
     GX_SYNC_INLINE();
     try { Memory::Write8(kGxDrawDoneFlagAddr, 0); } catch (...) {}
     GXDrawDone(); GX__FinishInterruptHandler_8016ed94();

@@ -24,6 +24,12 @@ struct Summary {
     Stat inputToNative;
     // Tick start -> seal: the game's own time per frame.
     Stat tickCpu;
+    // Controller read -> the tick's last GXDrawDone (the game finished drawing).
+    Stat inputToDrawDone;
+    // Last GXDrawDone -> seal (GXCopyDisp): how long a finished frame waits to be handed over.
+    Stat drawDoneToSeal;
+    // Time the game spent inside VIWaitForRetrace during the tick.
+    Stat retraceWait;
     // Time between consecutive presents, inserted ones included.
     Stat presentInterval;
     double presentFps = 0.0;
@@ -38,6 +44,8 @@ struct FrameRow {
     uint64_t sealNs = 0;
     uint64_t firstPresentNs = 0;
     uint64_t nativePresentNs = 0;
+    uint64_t drawDoneNs = 0;
+    uint64_t retraceWaitNs = 0;
     bool flash = false;
 };
 
@@ -47,6 +55,10 @@ public:
     // Only the first read of a tick counts. `flashHeld`: the flash-test button is down.
     void OnInputSample(uint64_t tag, uint64_t ns, bool flashHeld);
     void OnSeal(uint64_t tag, uint64_t ns);
+    // Every GXDrawDone; the last one before the seal counts.
+    void OnDrawDone(uint64_t tag, uint64_t ns);
+    // Adds one VIWaitForRetrace call's duration.
+    void AddRetraceWait(uint64_t tag, uint64_t durationNs);
     // Every present that reached the display; `first` is the frame's first one.
     void OnPresent(uint64_t tag, uint64_t ns, bool native, bool first);
 

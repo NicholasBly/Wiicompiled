@@ -61,6 +61,20 @@ void Recorder::OnSeal(uint64_t tag, uint64_t ns) {
     }
 }
 
+void Recorder::OnDrawDone(uint64_t tag, uint64_t ns) {
+    std::lock_guard lock(m_mutex);
+    if (FrameRow* frame = Find(tag); frame != nullptr && frame->sealNs == 0) {
+        frame->drawDoneNs = ns;
+    }
+}
+
+void Recorder::AddRetraceWait(uint64_t tag, uint64_t durationNs) {
+    std::lock_guard lock(m_mutex);
+    if (FrameRow* frame = Find(tag); frame != nullptr && frame->sealNs == 0) {
+        frame->retraceWaitNs += durationNs;
+    }
+}
+
 void Recorder::OnPresent(uint64_t tag, uint64_t ns, bool native, bool first) {
     std::lock_guard lock(m_mutex);
     if (m_lastPresentNs != 0 && ns > m_lastPresentNs) {
@@ -95,6 +109,9 @@ Summary Recorder::Summarize(uint32_t frames) const {
     std::vector<double> toFirst;
     std::vector<double> toNative;
     std::vector<double> tickCpu;
+    std::vector<double> toDrawDone;
+    std::vector<double> drawDoneToSeal;
+    std::vector<double> retraceWait;
     const size_t take = std::min<size_t>(frames, m_completed.size());
     for (size_t i = m_completed.size() - take; i < m_completed.size(); ++i) {
         const FrameRow* frame = Find(m_completed[i]);
@@ -107,6 +124,13 @@ Summary Recorder::Summarize(uint32_t frames) const {
         }
         if (frame->tickStartNs != 0 && frame->sealNs != 0) {
             tickCpu.push_back(Milliseconds(frame->tickStartNs, frame->sealNs));
+            retraceWait.push_back(static_cast<double>(frame->retraceWaitNs) / 1e6);
+        }
+        if (frame->drawDoneNs != 0 && frame->sealNs != 0) {
+            drawDoneToSeal.push_back(Milliseconds(frame->drawDoneNs, frame->sealNs));
+            if (frame->inputNs != 0) {
+                toDrawDone.push_back(Milliseconds(frame->inputNs, frame->drawDoneNs));
+            }
         }
     }
 
@@ -114,6 +138,9 @@ Summary Recorder::Summarize(uint32_t frames) const {
     summary.inputToFirst = Describe(toFirst);
     summary.inputToNative = Describe(toNative);
     summary.tickCpu = Describe(tickCpu);
+    summary.inputToDrawDone = Describe(toDrawDone);
+    summary.drawDoneToSeal = Describe(drawDoneToSeal);
+    summary.retraceWait = Describe(retraceWait);
     summary.recentIntervalsMs.reserve(m_intervalCount);
     std::vector<double> intervals;
     intervals.reserve(m_intervalCount);
@@ -161,7 +188,7 @@ Recorder& Global() {
 
 std::string CsvHeader() {
     return "frame,tick_start_ms,input_ms,seal_ms,first_present_ms,native_present_ms,"
-           "input_to_first_ms,input_to_native_ms,tick_cpu_ms,flash";
+           "input_to_first_ms,input_to_native_ms,tick_cpu_ms,flash,input_to_drawdone_ms,drawdone_to_seal_ms,retrace_wait_ms";
 }
 
 std::string CsvRow(const FrameRow& row, uint64_t originNs) {
@@ -181,6 +208,11 @@ std::string CsvRow(const FrameRow& row, uint64_t originNs) {
     line += ',' + field(row.inputNs, row.nativePresentNs);
     line += ',' + field(row.tickStartNs, row.sealNs);
     line += row.flash ? ",1" : ",0";
+    line += ',' + field(row.inputNs, row.drawDoneNs);
+    line += ',' + field(row.drawDoneNs, row.sealNs);
+    char wait[32];
+    std::snprintf(wait, sizeof(wait), ",%.3f", static_cast<double>(row.retraceWaitNs) / 1e6);
+    line += wait;
     return line;
 }
 

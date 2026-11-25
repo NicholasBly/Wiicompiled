@@ -181,7 +181,8 @@ $ErrorActionPreference = 'Continue'
 & $powershell @buildArgs 2>&1 | Tee-Object -FilePath $log | ForEach-Object {
     $line = "$_"
     if ($line -like 'MKWCBUILD:STEP:*') { Write-Host ($line -replace '^MKWCBUILD:STEP:\S+\s*', '  - ') }
-    elseif ($line -match 'error|FAILED') { Write-Host $line -ForegroundColor Red }
+    # Real failures only: compiler/linker errors and failed build steps, not CMake feature checks.
+    elseif ($line -match '^FAILED:|\berror:|\bfatal error\b|CMake Error') { Write-Host $line -ForegroundColor Red }
 }
 $buildExit = $LASTEXITCODE
 $ErrorActionPreference = 'Stop'

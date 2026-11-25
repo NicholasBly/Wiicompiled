@@ -128,13 +128,30 @@ void CompletedFramesBecomeCsvRowsOnce() {
     Check(rows.size() == 2 && rows[0].tag == 1 && rows[1].tag == 2, "rows come out in frame order");
     Check(recorder.TakeCompletedRows().empty(), "rows are handed out once");
     const std::string line = LatencyStats::CsvRow(rows[0], kBase);
-    Check(line == "1,0.000,0.000,3.000,4.000,15.000,4.000,15.000,3.000,0", "CSV row: " + line);
+    Check(line == "1,0.000,0.000,3.000,4.000,15.000,4.000,15.000,3.000,0,,,0.000", "CSV row: " + line);
     Check(LatencyStats::CsvHeader().rfind("frame,", 0) == 0, "CSV header starts with frame");
+}
+
+void BreakdownShowsWhereTheTickGoes() {
+    Recorder recorder;
+    recorder.OnTickStart(1, kBase);
+    recorder.OnInputSample(1, kBase + 1 * kMs, false);
+    recorder.OnDrawDone(1, kBase + 2 * kMs);
+    recorder.OnDrawDone(1, kBase + 3 * kMs);
+    recorder.AddRetraceWait(1, 5 * kMs);
+    recorder.AddRetraceWait(1, 7 * kMs);
+    recorder.OnSeal(1, kBase + 15 * kMs);
+    recorder.OnPresent(1, kBase + 16 * kMs, true, true);
+    const auto summary = recorder.Summarize();
+    Check(Near(summary.inputToDrawDone.avgMs, 2.0), "read -> last draw-done is 2 ms");
+    Check(Near(summary.drawDoneToSeal.avgMs, 12.0), "last draw-done -> seal is 12 ms");
+    Check(Near(summary.retraceWait.avgMs, 12.0), "retrace waits add up to 12 ms");
 }
 
 } // namespace
 
 int main() {
+    BreakdownShowsWhereTheTickGoes();
     InterpolatedFrameReportsFirstAndNativeLatency();
     FrameWithoutSlotsHasEqualFirstAndNative();
     UnknownTagIsIgnored();
